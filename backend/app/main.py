@@ -6,10 +6,11 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -25,6 +26,18 @@ from app.realtime.hub import hub
 logger = logging.getLogger("app")
 
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ),
+}
 
 
 def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
@@ -77,6 +90,10 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
 
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        if settings.environment == "production":
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         if CSRF_COOKIE not in request.cookies:
             response.set_cookie(
                 key=CSRF_COOKIE,
@@ -116,4 +133,29 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.include_router(agents.router, prefix=api_prefix)
     app.include_router(sessions.router, prefix=api_prefix)
 
+    if settings.frontend_dist:
+        _mount_frontend(app, Path(settings.frontend_dist))
+
     return app
+
+
+def _mount_frontend(app: FastAPI, dist: Path) -> None:
+    """Serve the built single-page app from the same origin as the API.
+
+    Same origin keeps cookies, CSRF and WebSockets simple. Unknown API paths get a real 404 rather
+    than the app shell, so clients never mistake a missing endpoint for a page.
+    """
+    root = dist.resolve()
+    index = root / "index.html"
+    if not index.is_file():
+        logger.warning("frontend_dist has no index.html; the UI will not be served", extra={"path": str(root)})
+        return
+
+    @app.api_route("/{full_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+    def spa(full_path: str) -> FileResponse:
+        if full_path == "api" or full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = (root / full_path).resolve()
+        if full_path and candidate.is_file() and root in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(index)

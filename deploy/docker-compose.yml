@@ -1,5 +1,8 @@
-# Local development only. Credentials here are throwaway defaults for localhost.
-# NOT verified on this machine yet: Docker Desktop was not running during Phase 1 task 1.2.
+# Run the whole hub locally with the production image.
+#   1. Create deploy/.env containing:  BRIDGE_TOKEN_SECRET=<at least 32 random characters>
+#   2. docker compose -f deploy/docker-compose.yml up --build
+#   3. Open http://localhost:8080
+# Postgres credentials below are local-only. Do not reuse them anywhere public.
 services:
   postgres:
     image: postgres:16
@@ -16,6 +19,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://collab:change-me-locally@postgres:5432/collab
+      BRIDGE_TOKEN_SECRET: ${BRIDGE_TOKEN_SECRET:?set BRIDGE_TOKEN_SECRET in deploy/.env}
+      CORS_ORIGINS: http://localhost:8080
+      # Plain HTTP on localhost only. Public deployments are HTTPS and keep secure cookies.
+      COOKIE_SECURE: "false"
+      ALLOW_REGISTRATION: "true"
+    ports:
+      - "8080:8000"
 
 volumes:
   pgdata:

@@ -19,7 +19,7 @@ tag that cannot install `pydantic-core` or `psycopg[binary]` wheels.
 ```powershell
 cd backend
 py -3.11 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # runtime + test/lint tools
 copy .env.example .env          # then edit DATABASE_URL if needed
 ```
 
@@ -124,7 +124,7 @@ The credentials in `deploy/docker-compose.yml` are local-only defaults and must 
 ```powershell
 cd bridge
 py -3.11 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .venv\Scripts\python.exe -m pytest -q            # 40 tests
 .venv\Scripts\python.exe -m ruff check collab_bridge tests
 ```

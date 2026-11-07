@@ -23,7 +23,7 @@ The bridge is the only part that touches a model. It runs your locally installed
 ```powershell
 cd bridge
 py -3.11 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r requirements.txt   # the bridge's own dependencies
 ```
 
 1. In the hub, open **Devices** and create a one-time pairing code.
