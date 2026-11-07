@@ -19,6 +19,18 @@ A workspace where a team plans and discusses the NatyaSutra port together: chann
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for detail and open items.
 
+## Free hosting limits (read before using the hosted hub)
+
+The hosted hub is set up on Render's **free plan**. These limits apply, per [Render's free plan documentation](https://render.com/docs/free):
+
+- **Database expires after 30 days.** After that there is a 14-day grace period to upgrade. If you don't upgrade, Render **deletes the database and all of its data**. Export it regularly (`pg_dump`) and before day 30.
+- **No database backups** on the free plan.
+- **Database storage is capped at 1 GB**, and only one free database is allowed per workspace.
+- **The web service spins down after 15 minutes without traffic.** Waking it takes about a minute. Bridges reconnect automatically.
+- **Monthly hours:** 750 free instance hours per workspace per month. If they run out, free services are suspended until the next month.
+
+To remove these limits, upgrade the database and web service to a paid plan in the Render dashboard. See [docs/deployment.md](docs/deployment.md).
+
 ## Quick start (Windows, PowerShell)
 
 Prerequisites: Docker Desktop, Python 3.11 (Windows build), Node.js LTS.

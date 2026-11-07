@@ -17,8 +17,11 @@ Serving the UI from the same address as the API avoids cross-origin cookies, so 
 
 Both resources use Render's free plan, so there is no charge. Its limits matter:
 
-- **Web service:** sleeps after about 15 minutes without traffic. The first visit after a sleep takes roughly 30–60 seconds. Bridges reconnect automatically when it wakes.
-- **PostgreSQL:** the free database **expires 30 days after it is created** and has **no backups**. Before the 30 days are up, either upgrade it in the Render dashboard or export your data. Plan for this now.
+- **Web service:** spins down after 15 minutes without inbound traffic. Waking it takes about one minute. Bridges reconnect automatically when it wakes. The filesystem is ephemeral; the hub stores everything in PostgreSQL, so this is safe.
+- **PostgreSQL:** **expires 30 days after creation**. After that there is a 14-day grace period to upgrade. If you don't upgrade, Render **deletes the database and its data**. It has **no backups** and a **1 GB** storage limit. Only one free database is allowed per workspace.
+- **Monthly hours:** each workspace gets 750 free instance hours a month. One always-on instance uses about 744 hours in a 31-day month, so this fits, but no other free services can share it. If the hours run out, Render suspends free services until the next month.
+
+Sources: [Render free plan documentation](https://render.com/docs/free).
 
 Plan limits can change. Check the Render pricing page before relying on them. You can change plans in the dashboard at any time.
 
@@ -91,7 +94,7 @@ The app refuses to start in production if `BRIDGE_TOKEN_SECRET` is missing or sh
 - **Health:** `GET /health` (process up), `GET /ready` (database reachable).
 - **Logs:** Render dashboard. Logs are JSON, one line per event. The app does not log message text, and a filter redacts bearer tokens and password-like fields, but that filter is pattern-based and not yet tested (`docs/security.md` §10).
 - **Scaling:** keep **one instance**. The realtime hub and rate limiter are in-process. Several instances would miss live updates and split rate limits (`docs/security.md` §10).
-- **Backups:** the free PostgreSQL plan has no backups. Export the data (`pg_dump` from the Render dashboard's connection details) regularly, and before the database's 30-day expiry. Upgrade to a paid plan for automatic backups.
+- **Backups:** the free PostgreSQL plan has no backups. Export the data regularly with `pg_dump` (connection details are in the Render dashboard), and before the 30-day expiry. Upgrade to a paid plan for automatic backups.
 - **Upgrades:** push to `main`. Migrations run before the server starts, so a failed migration stops the new version from starting. Render should keep the previous version serving in that case; confirm this on your first failed deploy.
 
 ## 6. Run the production image on your own machine
@@ -108,8 +111,8 @@ docker compose -f deploy/docker-compose.yml up --build
 
 ## Known limits of this deployment
 
-- Free-plan limits: the web service sleeps when idle, and the database expires after 30 days with no backups (see Cost above).
-- No automatic monitoring or alerting yet. Watch the health check in Render, or add an external uptime monitor. An external monitor that pings `/health` also keeps the free service awake.
+- Free-plan limits (see Cost above and the README): the web service spins down when idle, and the database expires after 30 days, is deleted after a 14-day grace period, and has no backups.
+- No automatic monitoring or alerting yet. Watch the health check in Render, or add an external uptime monitor. Pinging `/health` every few minutes keeps the free service awake all month; that is within the 750-hour allowance for one service.
 - No password reset by email. Use the operator command.
 - No multi-factor sign-in.
 - Rate limits are per process. Fine for one instance.
