@@ -1,8 +1,11 @@
 # Render Blueprint: one web service (API + built UI, from deploy/Dockerfile) and one PostgreSQL database.
 # Create it in Render: New > Blueprint > select this repository. See docs/deployment.md.
 #
-# Plans are the smallest paid tiers that keep the service awake and the database persistent.
-# Change them in the Render dashboard if your needs differ.
+# Both resources use Render's free plan. Free limits that matter here:
+# - The web service sleeps after ~15 minutes without traffic; the first request after that takes ~30-60 s.
+# - The free PostgreSQL database expires 30 days after creation and has no backups. Upgrade it, or export
+#   your data, before then.
+# - Free web services are limited to one instance, which this app requires anyway.
 
 services:
   - type: web
@@ -10,7 +13,7 @@ services:
     runtime: docker
     dockerfilePath: ./deploy/Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
     region: oregon
     healthCheckPath: /health
     autoDeploy: true
@@ -32,5 +35,5 @@ databases:
   - name: natyasutra-hub-db
     databaseName: natyasutra_hub
     user: natyasutra_hub
-    plan: basic-256mb
+    plan: free
     region: oregon
