@@ -157,7 +157,7 @@ Opt-in import, raw archive in object storage, normalisation, secret scanning and
 GitHub integration behind an interface (B5 for live verification), anchored comments, task↔branch links, isolated worktree creation with no cross-agent writes.
 
 ## 6. Phase 6 — Hardening and deployment
-Render (API, worker, managed PostgreSQL) and Vercel (frontend) configuration, backups, monitoring, rate-limit review, reconnect tests, onboarding docs. Nothing is claimed deployed until it has been deployed and verified (B5).
+Done: Render web service (API and built UI in one container), with the database on Supabase (us-west-2, Session pooler, row-level security on public tables). Deployed and verified by health checks, row counts and sign-in. Open: Supabase free plan has no backups and pauses after a week of inactivity, so scheduled `pg_dump` exports are the current backup. Remaining: monitoring, rate-limit review across instances, reconnect tests, onboarding docs. The Vercel frontend was dropped; the UI is served from the Render container.
 
 ---
 

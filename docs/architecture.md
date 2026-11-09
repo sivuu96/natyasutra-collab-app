@@ -92,10 +92,10 @@ PostgreSQL is authoritative. Nothing is cached elsewhere in Phase 1–3 (brief �
 
 | Component | Target | Verified? |
 |---|---|---|
-| Frontend | Vercel | No — not deployed (B5) |
-| API + realtime | Render web service | No — not deployed (B5) |
-| Worker | Render background worker | No — not deployed (B5) |
-| Database | Render managed PostgreSQL | No — not deployed (B5) |
+| Frontend | Served by the API container (no separate Vercel deployment) | Yes — live at Render |
+| API + realtime | Render web service (Docker) | Yes — live at Render |
+| Worker | Not deployed (the bridge runs on each developer's machine) | n/a |
+| Database | Supabase PostgreSQL (free plan, us-west-2) | Yes — migrated and verified |
 | Local dev | Docker Compose (PostgreSQL, API, worker) | Planned for Phase 1 |
 
 Configuration is environment-only. No production URLs or credentials appear in source.
