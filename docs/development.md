@@ -87,6 +87,7 @@ Migrations are PostgreSQL-first. Constraint names must be wrapped in `op.f(...)`
 | `d6f7a8b9c0d1` | Run activity and cancel |
 | `e7a8b9c0d1e2` | User handles |
 | `f2a3b4c5d6e7` | Removes the local bridge: devices, pairing, approvals, inbound events, Codex, and bridge-only columns. Refuses to run while a device-backed agent exists. Cannot be reversed. |
+| `a3b4c5d6e7f8` | Drops columns nothing read: agent description, platform admin flag, session last-seen time. Cannot be reversed. |
 
 The last migration was checked on PostgreSQL 16: it refused with a device-backed agent present, ran after that agent was removed, and `alembic check` reported no drift.
 

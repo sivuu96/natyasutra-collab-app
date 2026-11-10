@@ -24,8 +24,6 @@ class ProjectAgentOut(BaseModel):
     agent_id: uuid.UUID
     handle: str
     display_name: str
-    harness: str
-    description: str | None
     owner_user_id: uuid.UUID
     owner_display_name: str
 
@@ -70,8 +68,6 @@ def _agent_out(agent: Agent, owner: User) -> ProjectAgentOut:
         agent_id=agent.id,
         handle=agent.handle,
         display_name=agent.display_name,
-        harness=agent.harness,
-        description=agent.description,
         owner_user_id=owner.id,
         owner_display_name=owner.display_name,
     )
@@ -97,8 +93,6 @@ class MyAgentOut(BaseModel):
     id: uuid.UUID
     handle: str
     display_name: str
-    harness: str
-    description: str | None
     repository_full_name: str | None
     default_ref: str | None
     revoked: bool
@@ -113,8 +107,6 @@ def my_agents(user: User = Depends(get_current_user), db: Session = Depends(get_
             id=a.id,
             handle=a.handle,
             display_name=a.display_name,
-            harness=a.harness,
-            description=a.description,
             repository_full_name=a.repository_full_name,
             default_ref=a.default_ref,
             revoked=a.revoked_at is not None,

@@ -18,7 +18,7 @@ Source: `backend/`. Entry point: `app.main:create_app` (a factory, so tests and 
 | `app/services/` | Business logic that the routers call: agents, execution, leases, runtime events, sweeper, transcript, and so on. |
 | `app/services/providers/` | Execution providers: the in-process fake and Cloud Run Jobs. |
 | `app/realtime/hub.py` | In-process fan-out of committed events to WebSocket subscribers. |
-| `migrations/` | Alembic migrations. The chain runs from `b38873a6b2ce` to `f2a3b4c5d6e7`. |
+| `migrations/` | Alembic migrations. The chain runs from `b38873a6b2ce` to `a3b4c5d6e7f8`. |
 | `scripts/` | Operator commands (below). |
 | `tests/` | pytest suite. Runs on SQLite; PostgreSQL integration tests run when `TEST_DATABASE_URL` is set. |
 

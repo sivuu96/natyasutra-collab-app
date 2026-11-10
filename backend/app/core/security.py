@@ -4,7 +4,6 @@ Uses argon2-cffi (established library). No custom cryptography.
 """
 
 import hashlib
-import hmac
 import secrets
 
 from argon2 import PasswordHasher
@@ -36,7 +35,3 @@ def new_session_token() -> str:
 def hash_token(token: str) -> str:
     """Only this digest is stored server-side; the raw token lives in the browser cookie."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def constant_time_equals(left: str, right: str) -> bool:
-    return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))

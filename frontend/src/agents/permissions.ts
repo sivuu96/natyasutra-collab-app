@@ -6,7 +6,7 @@ import type { ProjectRole } from "../api/types";
 
 const RANK: Record<ProjectRole, number> = { viewer: 0, member: 1, admin: 2, owner: 3 };
 
-export interface AgentActor {
+interface AgentActor {
   userId: string;
   role: ProjectRole;
 }
@@ -22,7 +22,7 @@ export function canCancelInvocation(actor: AgentActor, requesterId: string | nul
   return actor.userId === requesterId || actor.userId === agentOwnerId || RANK[actor.role] >= RANK.admin;
 }
 
-export const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 export function isActive(status: string): boolean {
   return !TERMINAL_STATUSES.has(status);

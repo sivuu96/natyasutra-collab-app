@@ -110,7 +110,7 @@ def test_stream_lines_are_parsed_and_junk_is_ignored() -> None:
     result = '{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s"}'
     assert parse_stream_line(assistant).text == "hi"
     parsed = parse_stream_line(result)
-    assert parsed.kind == "result" and not parsed.is_error and parsed.session_id == "s"
+    assert parsed.kind == "result" and not parsed.is_error
     assert parse_stream_line("not json").kind == "other"
     assert parse_stream_line("[1, 2]").kind == "other"
 
@@ -135,7 +135,6 @@ def test_harness_output_is_streamed_redacted_and_the_key_reaches_only_the_child(
         emit_text=emitted.append,
     )
     assert outcome.ok
-    assert outcome.session_id == "sess-1"
     assert all(API_KEY not in text for text in emitted)
     assert API_KEY not in outcome.final_text
     assert any("[redacted]" in text for text in emitted)

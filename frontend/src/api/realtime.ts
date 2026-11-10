@@ -16,7 +16,7 @@ export interface RealtimeEnvelope {
   [key: string]: unknown;
 }
 
-export interface RealtimeOptions {
+interface RealtimeOptions {
   projectId: string;
   onEvent: (event: RealtimeEnvelope) => void;
   onStatus?: (status: RealtimeStatus) => void;
@@ -31,7 +31,7 @@ export const NOT_AUTHORISED_CLOSE_CODE = 1008;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
 
-export function defaultBackoff(attempt: number): number {
+function defaultBackoff(attempt: number): number {
   const ceiling = Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 2 ** attempt);
   return Math.floor(Math.random() * ceiling);
 }

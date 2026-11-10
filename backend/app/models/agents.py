@@ -33,7 +33,6 @@ class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     handle: Mapped[str] = mapped_column(String(40), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
     harness: Mapped[str] = mapped_column(String(20), nullable=False)
-    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # The repository a run clones and the branch it checks out. Must be on the hub allow-list.
     repository_full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     default_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)

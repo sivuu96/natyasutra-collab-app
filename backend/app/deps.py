@@ -52,7 +52,6 @@ def authenticate(conn: HTTPConnection, db: Session) -> User:
         raise unauthorised
 
     settings = conn.app.state.settings
-    row.last_seen_at = now
     row.idle_expires_at = now + dt.timedelta(minutes=settings.session_idle_minutes)
     db.commit()
     return user

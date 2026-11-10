@@ -119,8 +119,6 @@ export interface ProjectAgent {
   agent_id: string;
   handle: string;
   display_name: string;
-  harness: "claude_code";
-  description: string | null;
   owner_user_id: string;
   owner_display_name: string;
 }
@@ -129,14 +127,12 @@ export interface MyAgent {
   id: string;
   handle: string;
   display_name: string;
-  harness: "claude_code";
-  description: string | null;
   repository_full_name: string | null;
   default_ref: string | null;
   revoked: boolean;
 }
 
-export type InvocationStatus = "queued" | "accepted" | "running" | "completed" | "failed" | "cancelled";
+type InvocationStatus = "queued" | "accepted" | "running" | "completed" | "failed" | "cancelled";
 
 export interface Invocation {
   id: string;

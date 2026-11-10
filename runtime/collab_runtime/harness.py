@@ -55,7 +55,6 @@ def child_env(api_key: str, home: str) -> dict[str, str]:
 class RunOutcome:
     ok: bool
     final_text: str = ""
-    session_id: str | None = None
     error_code: str | None = None
     error_message: str | None = None
     emitted_bytes: int = 0
@@ -67,7 +66,6 @@ class ParsedLine:
     kind: str  # "text", "result", or "other"
     text: str = ""
     is_error: bool = False
-    session_id: str | None = None
 
 
 def parse_stream_line(line: str) -> ParsedLine:
@@ -87,7 +85,6 @@ def parse_stream_line(line: str) -> ParsedLine:
             "result",
             text=str(obj.get("result") or ""),
             is_error=bool(obj.get("is_error")) or obj.get("subtype") not in (None, "success"),
-            session_id=obj.get("session_id"),
         )
     return ParsedLine("other")
 
@@ -184,7 +181,6 @@ class ClaudeRunner:
         return RunOutcome(
             ok=True,
             final_text=redact(final.text, api_key),
-            session_id=final.session_id,
             emitted_bytes=outcome.emitted_bytes,
             notes=outcome.notes,
         )

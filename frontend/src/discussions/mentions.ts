@@ -6,7 +6,7 @@ export interface MentionCandidate {
   kind: "agent" | "person";
 }
 
-export interface ActiveMention {
+interface ActiveMention {
   /** Index of the "@" that starts the token. */
   start: number;
   /** Text typed after the "@", without the "@". */

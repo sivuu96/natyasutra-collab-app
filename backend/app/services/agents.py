@@ -70,10 +70,6 @@ def _project_envelope(
     return record_event(db, project_id=project_id, event_type=event_type, actor_user_id=actor, payload=payload)
 
 
-def attached_project_ids(db: Session, agent_id: uuid.UUID) -> list[uuid.UUID]:
-    return list(db.scalars(select(ProjectAgent.project_id).where(ProjectAgent.agent_id == agent_id)).all())
-
-
 # ---- creating runs -------------------------------------------------------------------------------
 
 

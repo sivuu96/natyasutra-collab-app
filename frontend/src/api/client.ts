@@ -16,14 +16,14 @@ export class ApiError extends Error {
   }
 }
 
-export const API_PREFIX = "/api/v1";
+const API_PREFIX = "/api/v1";
 
 export function readCsrfToken(cookieString: string = document.cookie): string {
   const match = cookieString.match(/(?:^|;\s*)ns_csrf=([^;]*)/);
   return match ? decodeURIComponent(match[1]) : "";
 }
 
-export interface ApiRequest extends Omit<RequestInit, "body"> {
+interface ApiRequest extends Omit<RequestInit, "body"> {
   json?: unknown;
 }
 

@@ -45,11 +45,3 @@ def load_project_for(
     if project is None:  # membership without project cannot normally exist; treat as absent
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return project, membership
-
-
-def can_read(role: str) -> bool:
-    return ROLE_RANK.get(role, -1) >= ROLE_RANK[ProjectRole.VIEWER.value]
-
-
-def can_write(role: str) -> bool:
-    return ROLE_RANK.get(role, -1) >= ROLE_RANK[ProjectRole.MEMBER.value]

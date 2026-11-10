@@ -50,7 +50,6 @@ def _start_session(db: Session, request: Request, response: Response, user: User
         AuthSession(
             user_id=user.id,
             token_hash=hash_token(token),
-            last_seen_at=now,
             idle_expires_at=now + dt.timedelta(minutes=settings.session_idle_minutes),
             absolute_expires_at=now + dt.timedelta(hours=settings.session_absolute_hours),
         )

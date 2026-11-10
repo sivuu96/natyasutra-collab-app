@@ -1,6 +1,6 @@
 // Tracks what each running agent is doing, from realtime events. Keyed by invocation id.
 
-export interface RunProgress {
+interface RunProgress {
   invocationId: string;
   agentHandle: string;
   stage: string;
