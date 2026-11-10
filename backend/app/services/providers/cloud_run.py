@@ -53,8 +53,12 @@ class CloudRunJobsProvider:
             self._credentials.refresh(GoogleRequest())
         return {"Authorization": f"Bearer {self._credentials.token}", "Content-Type": "application/json"}
 
-    def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str) -> str:
-        """Start a job execution. Returns the execution resource name."""
+    def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str, lease_token: str) -> str:
+        """Start a job execution. Returns the execution resource name.
+
+        The lease token is one-use and expires in minutes (see app.services.execution.RUN_LEASE_MINUTES).
+        It is the job's only credential, and the job exchanges it immediately at startup.
+        """
         body = {
             "overrides": {
                 "containerOverrides": [
@@ -63,6 +67,7 @@ class CloudRunJobsProvider:
                             {"name": "INVOCATION_ID", "value": str(invocation_id)},
                             {"name": "DEDUPE_KEY", "value": dedupe_key},
                             {"name": "HUB_BASE_URL", "value": self._hub_base_url},
+                            {"name": "RUN_LEASE", "value": lease_token},
                         ]
                     }
                 ]

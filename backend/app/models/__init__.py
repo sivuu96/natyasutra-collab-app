@@ -4,7 +4,7 @@ from app.models.audit import AuditEvent
 from app.models.auth import AuthSession
 from app.models.bridge import Agent, AgentApproval, AgentEvent, AgentInvocation, BridgeDevice, PairingCode, ProjectAgent
 from app.models.events import ProjectEvent
-from app.models.execution import ExecutionOutbox
+from app.models.execution import ExecutionOutbox, InvocationLease, RunEvent
 from app.models.identity import Team, TeamMembership, User
 from app.models.projects import Channel, Project, ProjectMembership
 from app.models.sessions import AgentSession, AgentSessionMessage
@@ -24,6 +24,8 @@ __all__ = [
     "Decision",
     "DecisionRevision",
     "ExecutionOutbox",
+    "InvocationLease",
+    "RunEvent",
     "Message",
     "PairingCode",
     "Project",

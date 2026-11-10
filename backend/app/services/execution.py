@@ -1,33 +1,42 @@
 """Execution provider interface and the outbox worker that starts runs through it.
 
 Rules (see docs/AGENT_RUNTIME_MIGRATION_SPEC.md):
-- Provider calls never run inside a database transaction. The worker claims a row (committed), calls the
-  provider, then records the outcome in a second transaction.
+- Provider calls never run inside a database transaction. The worker claims a row (committed), mints a
+  one-use run lease (committed), calls the provider, then records the outcome in a further transaction.
 - Every submit carries the outbox `dedupe_key` as the provider's idempotency key.
 - A claim is a lease. An expired lease can be reclaimed, so a crashed worker cannot strand work.
+- The run lease token is the only credential the job receives. Only its SHA-256 is stored.
 - Failed submits back off and move to `dead` after `max_attempts`; the invocation is then marked failed.
 """
 
 import datetime as dt
+import hashlib
+import secrets
 import uuid
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utcnow
 from app.models.bridge import AgentInvocation
 from app.models.enums import InvocationStatus
-from app.models.execution import ExecutionOutbox
+from app.models.execution import ExecutionOutbox, InvocationLease
+
+RUN_LEASE_MINUTES = 10  # how long a job has to exchange its lease after it starts
 
 
 class ProviderError(Exception):
     """A provider call failed. The worker retries with backoff."""
 
 
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 class ExecutionProvider(Protocol):
-    def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str) -> str:
+    def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str, lease_token: str) -> str:
         """Start a run. Returns the provider's execution id. Must be idempotent on `dedupe_key`."""
 
     def cancel(self, provider_execution_id: str) -> None:
@@ -40,19 +49,23 @@ class FakeExecutionProvider:
 
     fail_next: int = 0
     submitted: list[tuple[uuid.UUID, str, str]] = field(default_factory=list)
+    lease_tokens: dict[str, str] = field(default_factory=dict)  # execution id -> lease token it was given
     cancelled: list[str] = field(default_factory=list)
     _by_key: dict[str, str] = field(default_factory=dict)
 
-    def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str) -> str:
+    def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str, lease_token: str) -> str:
         if self.fail_next > 0:
             self.fail_next -= 1
             raise ProviderError("simulated provider failure")
         # Idempotent: the same key always returns the same execution, as a real provider would.
         if dedupe_key in self._by_key:
-            return self._by_key[dedupe_key]
+            existing = self._by_key[dedupe_key]
+            self.lease_tokens[existing] = lease_token  # the newest lease is the one the job will hold
+            return existing
         execution_id = f"fake-{uuid.uuid4().hex[:12]}"
         self._by_key[dedupe_key] = execution_id
         self.submitted.append((invocation_id, dedupe_key, execution_id))
+        self.lease_tokens[execution_id] = lease_token
         return execution_id
 
     def cancel(self, provider_execution_id: str) -> None:
@@ -80,6 +93,33 @@ def enqueue_dispatch(db: Session, invocation_id: uuid.UUID, *, now: dt.datetime 
     db.add(row)
     db.flush()
     return row
+
+
+def mint_lease(db: Session, invocation_id: uuid.UUID) -> str:
+    """Create a one-use lease for an invocation attempt and return its plaintext token.
+
+    Earlier unused leases for the same invocation are revoked, so only the newest attempt can be exchanged.
+    Call inside a transaction the caller commits before the provider is called.
+    """
+    now = utcnow()
+    db.execute(
+        update(InvocationLease)
+        .where(
+            InvocationLease.invocation_id == invocation_id,
+            InvocationLease.used_at.is_(None),
+            InvocationLease.revoked_at.is_(None),
+        )
+        .values(revoked_at=now)
+    )
+    token = secrets.token_urlsafe(32)
+    db.add(
+        InvocationLease(
+            invocation_id=invocation_id,
+            token_hash=hash_token(token),
+            expires_at=now + dt.timedelta(minutes=RUN_LEASE_MINUTES),
+        )
+    )
+    return token
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -137,18 +177,20 @@ def process_once(
 
     processed = 0
     for outbox_id in ids:
-        # Read what the provider needs, then release the transaction before calling out.
+        # Read what the provider needs and mint the run lease, then commit before calling out.
         with session_factory() as db:
             row = db.get(ExecutionOutbox, outbox_id)
             if row is None or row.status != "claimed" or row.lease_owner != owner:
                 continue
             invocation_id = row.invocation_id
             dedupe_key = row.dedupe_key
+            lease_token = mint_lease(db, invocation_id)
+            db.commit()
 
         execution_id: str | None = None
         error: str | None = None
         try:
-            execution_id = provider.submit(invocation_id=invocation_id, dedupe_key=dedupe_key)
+            execution_id = provider.submit(invocation_id=invocation_id, dedupe_key=dedupe_key, lease_token=lease_token)
         except Exception as exc:  # any provider failure is retried; details are truncated and stored
             error = f"{type(exc).__name__}: {exc}"[:500]
 
@@ -161,6 +203,12 @@ def process_once(
             row.lease_expires_at = None
             row.attempts += 1
             if execution_id is not None:
+                # Bind the lease to the execution so an exchange must come from the run we started.
+                db.execute(
+                    update(InvocationLease)
+                    .where(InvocationLease.token_hash == hash_token(lease_token))
+                    .values(provider_execution_id=execution_id)
+                )
                 row.status = "done"
                 row.provider_execution_id = execution_id
                 row.completed_at = utcnow()
@@ -187,11 +235,14 @@ def process_once(
 
 
 __all__ = [
+    "RUN_LEASE_MINUTES",
     "ExecutionProvider",
     "FakeExecutionProvider",
     "ProviderError",
     "claim_due",
     "enqueue_dispatch",
+    "hash_token",
+    "mint_lease",
     "process_once",
     "retry_delay_seconds",
 ]

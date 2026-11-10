@@ -171,8 +171,8 @@ def test_expired_lease_is_reclaimed(
 def test_fake_provider_is_idempotent_on_dedupe_key() -> None:
     provider = FakeExecutionProvider()
     invocation = uuid.uuid4()
-    first = provider.submit(invocation_id=invocation, dedupe_key="dispatch:x")
-    second = provider.submit(invocation_id=invocation, dedupe_key="dispatch:x")
+    first = provider.submit(invocation_id=invocation, dedupe_key="dispatch:x", lease_token="t")
+    second = provider.submit(invocation_id=invocation, dedupe_key="dispatch:x", lease_token="t")
     assert first == second
     assert len(provider.submitted) == 1
 

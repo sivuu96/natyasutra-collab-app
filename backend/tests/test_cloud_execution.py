@@ -6,7 +6,6 @@ No test contacts Google Cloud. The provider is exercised with httpx.MockTranspor
 import base64
 import json
 import uuid
-from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -15,10 +14,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import API, create_project, csrf_headers, general_channel, register
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import Engine, select
+from sqlalchemy import select
 
 from app.core.config import Settings
-from app.main import create_app
 from app.models.bridge import Agent, AgentInvocation, ProjectAgent
 from app.models.enums import InvocationStatus
 from app.models.execution import ExecutionOutbox
@@ -63,7 +61,7 @@ def test_submit_starts_the_job_with_identifiers_only() -> None:
         return httpx.Response(200, json={"metadata": {"name": EXECUTION_NAME}})
 
     invocation = uuid.uuid4()
-    name = _provider(handler).submit(invocation_id=invocation, dedupe_key="dispatch:abc")
+    name = _provider(handler).submit(invocation_id=invocation, dedupe_key="dispatch:abc", lease_token="lease-token")
 
     assert name == EXECUTION_NAME
     assert seen["url"] == (
@@ -75,6 +73,7 @@ def test_submit_starts_the_job_with_identifiers_only() -> None:
         "INVOCATION_ID": str(invocation),
         "DEDUPE_KEY": "dispatch:abc",
         "HUB_BASE_URL": "https://hub.example",
+        "RUN_LEASE": "lease-token",
     }
 
 
@@ -84,14 +83,14 @@ def test_submit_refreshes_expired_credentials_before_calling() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"metadata": {"name": EXECUTION_NAME}})
 
-    _provider(handler, credentials).submit(invocation_id=uuid.uuid4(), dedupe_key="k")
+    _provider(handler, credentials).submit(invocation_id=uuid.uuid4(), dedupe_key="k", lease_token="t")
     assert credentials.refresh_calls == 1
 
 
 def test_http_error_becomes_a_provider_error() -> None:
     provider = _provider(lambda _r: httpx.Response(500, text="boom"))
     with pytest.raises(ProviderError, match="HTTP 500"):
-        provider.submit(invocation_id=uuid.uuid4(), dedupe_key="k")
+        provider.submit(invocation_id=uuid.uuid4(), dedupe_key="k", lease_token="t")
 
 
 def test_transport_error_becomes_a_provider_error() -> None:
@@ -99,13 +98,13 @@ def test_transport_error_becomes_a_provider_error() -> None:
         raise httpx.ConnectError("no route")
 
     with pytest.raises(ProviderError, match="transport error"):
-        _provider(handler).submit(invocation_id=uuid.uuid4(), dedupe_key="k")
+        _provider(handler).submit(invocation_id=uuid.uuid4(), dedupe_key="k", lease_token="t")
 
 
 def test_missing_execution_name_is_an_error() -> None:
     provider = _provider(lambda _r: httpx.Response(200, json={"name": "operation"}))
     with pytest.raises(ProviderError, match="execution name"):
-        provider.submit(invocation_id=uuid.uuid4(), dedupe_key="k")
+        provider.submit(invocation_id=uuid.uuid4(), dedupe_key="k", lease_token="t")
 
 
 def test_cancel_posts_to_the_execution_and_treats_404_as_done() -> None:
@@ -159,23 +158,6 @@ def test_bridge_is_the_default_mode() -> None:
 
 
 # ---- mention to delivery, through the API ----------------------------------------------------------
-
-
-@pytest.fixture
-def fake_app(engine: Engine) -> FastAPI:
-    settings = Settings(
-        environment="test",
-        log_level="WARNING",
-        execution_provider="fake",
-        execution_worker_enabled=False,  # the test drives the worker explicitly
-    )
-    return create_app(settings=settings, engine=engine)
-
-
-@pytest.fixture
-def fake_client(fake_app: FastAPI) -> Iterator[TestClient]:
-    with TestClient(fake_app) as client:
-        yield client
 
 
 def test_mention_is_queued_and_the_worker_delivers_it(fake_app: FastAPI, fake_client: TestClient) -> None:

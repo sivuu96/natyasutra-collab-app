@@ -71,6 +71,9 @@ class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     harness: Mapped[str] = mapped_column(String(20), nullable=False)
     description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    # Cloud agents: the repository a run clones and the branch it checks out. Must be on the hub allow-list.
+    repository_full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    default_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

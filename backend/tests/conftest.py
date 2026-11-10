@@ -56,6 +56,24 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 @pytest.fixture
+def fake_app(engine: Engine) -> FastAPI:
+    """App in cloud mode with the in-process fake provider. The test drives the outbox worker explicitly."""
+    settings = Settings(
+        environment="test",
+        log_level="WARNING",
+        execution_provider="fake",
+        execution_worker_enabled=False,
+    )
+    return create_app(settings=settings, engine=engine)
+
+
+@pytest.fixture
+def fake_client(fake_app: FastAPI) -> Iterator[TestClient]:
+    with TestClient(fake_app) as client:
+        yield client
+
+
+@pytest.fixture
 def client_factory(app: FastAPI) -> Callable[[], TestClient]:
     """Each call returns a client with its own cookie jar, i.e. a separate browser session."""
     clients: list[TestClient] = []

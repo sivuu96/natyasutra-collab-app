@@ -15,7 +15,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
-from app.api import activity, agents, auth, bridge, devices, discussions, realtime, sessions, work, workspace
+from app.api import activity, agents, auth, bridge, devices, discussions, realtime, runtime, sessions, work, workspace
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.ratelimit import RateLimiter
@@ -97,10 +97,12 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         request.state.request_id = request_id
 
         # Double-submit CSRF: a state-changing API call must echo the ns_csrf cookie in a header.
-        # Bridge endpoints are exempt: bridges are non-browser clients that never send cookies.
+        # Bridge and runtime endpoints are exempt: they are non-browser clients that never send cookies.
+        # Runtime calls authenticate with a bearer run lease instead.
         if (
             request.url.path.startswith("/api/")
             and not request.url.path.startswith("/api/v1/bridge/")
+            and not request.url.path.startswith("/api/v1/internal/executions/")
             and request.method in UNSAFE_METHODS
         ):
             cookie_value = request.cookies.get(CSRF_COOKIE, "")
@@ -152,6 +154,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.include_router(bridge.router, prefix=api_prefix)
     app.include_router(agents.router, prefix=api_prefix)
     app.include_router(sessions.router, prefix=api_prefix)
+    app.include_router(runtime.router, prefix=api_prefix)
 
     if settings.frontend_dist:
         _mount_frontend(app, Path(settings.frontend_dist))

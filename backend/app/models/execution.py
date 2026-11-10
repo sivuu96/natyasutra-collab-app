@@ -39,4 +39,41 @@ class ExecutionOutbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-__all__ = ["OUTBOX_STATUSES", "ExecutionOutbox"]
+class InvocationLease(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One-use credential for one run attempt. Only the SHA-256 of the token is stored.
+
+    The job exchanges the token once (see app.services.leases). The exchange marks `used_at`, and a second
+    exchange fails. Expiry and revocation are checked on every exchange.
+    """
+
+    __tablename__ = "invocation_leases"
+    __table_args__ = (UniqueConstraint("token_hash", name="uq_invocation_leases_token_hash"),)
+
+    invocation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("agent_invocations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the provider reports the execution. An exchange must present the same name.
+    provider_execution_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+
+class RunEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Sequence log of runtime events. Text is not stored here: messages are stored where they belong.
+
+    The unique (invocation, sequence) pair makes a retried event a no-op.
+    """
+
+    __tablename__ = "run_events"
+    __table_args__ = (UniqueConstraint("invocation_id", "sequence", name="uq_run_events_invocation_sequence"),)
+
+    invocation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("agent_invocations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+__all__ = ["OUTBOX_STATUSES", "ExecutionOutbox", "InvocationLease", "RunEvent"]

@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     gcp_job_name: str = "collab-agent-runtime"
     # Base64 of the dispatcher service-account JSON key. A secret: never logged or returned by the API.
     gcp_dispatcher_key: SecretStr | None = None
+    # Repositories an agent run may clone, as "owner/name". A run for any other repository is refused.
+    github_allowed_repos: Annotated[list[str], NoDecode] = Field(default_factory=list)
     execution_worker_enabled: bool = True
     execution_worker_interval_seconds: float = 5.0
 
@@ -58,6 +60,13 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("github_allowed_repos", mode="before")
+    @classmethod
+    def _split_repos(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
