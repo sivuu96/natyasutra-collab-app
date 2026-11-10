@@ -201,3 +201,22 @@ def test_the_runtime_token_is_scoped_to_its_run(fake_app: FastAPI, fake_client: 
     )
 
     assert claims["sub"] == str(run["invocation_id"])
+
+
+def test_the_short_execution_name_from_the_job_environment_is_accepted(
+    fake_app: FastAPI, fake_client: TestClient
+) -> None:
+    run = _start_run(fake_app, fake_client, handle=f"short{uuid.uuid4().hex[:6]}")
+    full = (
+        "projects/natyasutra-agents/locations/us-west1/jobs/collab-agent-runtime/executions/collab-agent-runtime-n4cl7"
+    )
+    with fake_app.state.session_factory() as db:
+        db.execute(
+            update(InvocationLease)
+            .where(InvocationLease.invocation_id == run["invocation_id"])
+            .values(provider_execution_id=full)
+        )
+        db.commit()
+
+    short = "collab-agent-runtime-n4cl7"
+    assert _exchange(fake_client, run["token"], short).status_code == 200

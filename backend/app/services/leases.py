@@ -105,7 +105,10 @@ def exchange_lease(
         raise LeaseError(409, "run_not_active")
     if lease.provider_execution_id is None:
         raise LeaseError(409, "execution_not_bound")  # the worker has not recorded the execution yet; retry
-    if lease.provider_execution_id != execution_name:
+    # Cloud Run gives the job its execution's short name; the provider returns the full resource name.
+    # Both identify the same execution, so accept either form and nothing else.
+    bound = lease.provider_execution_id
+    if execution_name not in (bound, bound.rsplit("/", 1)[-1]):
         raise LeaseError(409, "execution_mismatch")
     agent = db.get(Agent, invocation.agent_id)
     if agent is None:
