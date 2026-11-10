@@ -324,22 +324,6 @@ export function DiscussionsView() {
           {activeChannel?.topic && <p className="text-sm text-stone-600">{activeChannel.topic}</p>}
         </div>
         <ErrorText>{error}</ErrorText>
-        {activeRuns(runs, now).length > 0 && (
-          <ul aria-label="Agent progress" className="space-y-1 text-sm text-stone-700">
-            {activeRuns(runs, now).map((run) => (
-              <li key={run.invocationId} className="flex items-center justify-between rounded bg-violet-50 px-3 py-1">
-                <span>
-                  <span className="font-medium">@{run.agentHandle}</span>: {run.stage || "working"}…
-                </span>
-                {canWrite && (
-                  <button className="text-red-700 hover:underline" onClick={() => void cancelRun(run.invocationId)}>
-                    Stop
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
         <Card className="flex-1 overflow-y-auto">
           {threads.roots.length === 0 && <EmptyState>No messages yet. Start the conversation.</EmptyState>}
           <ul className="divide-y divide-stone-100">
@@ -362,6 +346,22 @@ export function DiscussionsView() {
                   Cancel reply
                 </button>
               </p>
+            )}
+            {activeRuns(runs, now).length > 0 && (
+              <ul aria-label="Agent progress" className="space-y-1 text-sm text-stone-700">
+                {activeRuns(runs, now).map((run) => (
+                  <li key={run.invocationId} className="flex items-center justify-between rounded bg-violet-50 px-3 py-1">
+                    <span>
+                      <span className="font-medium">@{run.agentHandle}</span>: {run.stage || "working"}…
+                    </span>
+                    {canWrite && (
+                      <button className="text-red-700 hover:underline" onClick={() => void cancelRun(run.invocationId)}>
+                        Stop
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
             )}
             <Label htmlFor="composer">Message</Label>
             <div className="relative">
