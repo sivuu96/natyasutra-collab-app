@@ -37,6 +37,8 @@ class ExecutionOutbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     provider_execution_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set once the provider has been asked to stop this run, so the stop is sent exactly once.
+    cancel_sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class InvocationLease(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.services.execution import ExecutionProvider, process_once
+from app.services.sweeper import sweep_runs
 
 log = logging.getLogger("collab.execution_worker")
 
@@ -30,6 +31,9 @@ async def run_outbox_worker(
             processed = await asyncio.to_thread(process_once, session_factory, provider, owner=worker_owner)
             if processed:
                 log.info("execution outbox processed", extra={"count": processed})
+            swept = await asyncio.to_thread(sweep_runs, session_factory, provider)
+            if swept:
+                log.info("stuck runs handled", extra={"count": swept})
         except Exception:  # keep the loop alive; the error is logged with its traceback
             log.exception("execution outbox pass failed")
         with contextlib.suppress(TimeoutError):

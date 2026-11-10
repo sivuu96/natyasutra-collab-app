@@ -128,6 +128,8 @@ class AgentInvocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     delivered_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last time the runtime reported in (exchange, event, or heartbeat). Used to detect stuck runs.
+    last_activity_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AgentApproval(UUIDPrimaryKeyMixin, TimestampMixin, Base):

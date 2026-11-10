@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utcnow
 from app.models.bridge import AgentInvocation
-from app.models.enums import InvocationStatus
+from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import ExecutionOutbox, InvocationLease
 
 RUN_LEASE_MINUTES = 10  # how long a job has to exchange its lease after it starts
@@ -184,6 +184,15 @@ def process_once(
                 continue
             invocation_id = row.invocation_id
             dedupe_key = row.dedupe_key
+            invocation = db.get(AgentInvocation, invocation_id)
+            if invocation is None or invocation.status in {s.value for s in TERMINAL_INVOCATION_STATUSES}:
+                # Cancelled or failed before it started: never start it now.
+                row.status = "done"
+                row.completed_at = utcnow()
+                row.lease_owner = None
+                row.lease_expires_at = None
+                db.commit()
+                continue
             lease_token = mint_lease(db, invocation_id)
             db.commit()
 

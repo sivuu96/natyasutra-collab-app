@@ -22,6 +22,8 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # @handle people can be suggested and mentioned by. Unique among people and agents (see services/handles).
+    handle: Mapped[str | None] = mapped_column(String(40), unique=True, nullable=True)
 
 
 class Team(UUIDPrimaryKeyMixin, TimestampMixin, Base):

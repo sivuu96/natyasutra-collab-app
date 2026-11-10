@@ -128,6 +128,7 @@ def exchange_lease(
 
     if invocation.status == InvocationStatus.DELIVERED.value:
         invocation.status = InvocationStatus.ACCEPTED.value
+    invocation.last_activity_at = now
 
     runtime_token, expires_in = issue_runtime_token(runtime_secret, invocation.id, now)
     context = RunContext(

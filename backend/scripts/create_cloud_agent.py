@@ -20,6 +20,7 @@ from app.models.bridge import Agent, ProjectAgent
 from app.models.identity import User
 from app.models.projects import Project, ProjectMembership
 from app.services.audit import record_audit
+from app.services.handles import handle_taken
 
 HANDLE = re.compile(r"^[a-z][a-z0-9_-]{1,38}$")
 MANAGE_ROLES = {"owner", "admin"}
@@ -41,7 +42,10 @@ def main(argv: list[str] | None = None) -> int:
         print("handle must be 2-39 characters: lowercase letters, digits, - or _", file=sys.stderr)
         return 2
     if args.repo not in settings.github_allowed_repos:
-        print(f"{args.repo} is not on GITHUB_ALLOWED_REPOS: {', '.join(settings.github_allowed_repos) or '(empty)'}", file=sys.stderr)
+        print(
+            f"{args.repo} is not on GITHUB_ALLOWED_REPOS: {', '.join(settings.github_allowed_repos) or '(empty)'}",
+            file=sys.stderr,
+        )
         return 2
 
     engine = make_engine(settings.database_url)
@@ -64,8 +68,8 @@ def main(argv: list[str] | None = None) -> int:
             if membership is None or membership.role not in MANAGE_ROLES:
                 print(f"{args.email} must be an owner or admin of {args.project_slug}", file=sys.stderr)
                 return 2
-            if db.scalar(select(Agent.id).where(Agent.handle == args.handle)) is not None:
-                print(f"handle @{args.handle} is already taken", file=sys.stderr)
+            if handle_taken(db, args.handle):
+                print(f"handle @{args.handle} is already taken by a person or an agent", file=sys.stderr)
                 return 2
 
             print(f"project: {project.name} ({project.slug})")

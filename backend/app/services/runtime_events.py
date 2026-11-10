@@ -23,7 +23,7 @@ from app.services.agents import _project_envelope, session_scope
 
 class RunEventIn(BaseModel):
     sequence: int = Field(ge=0, le=1_000_000)
-    type: Literal["started", "output", "message", "completed", "failed"]
+    type: Literal["started", "progress", "heartbeat", "output", "message", "completed", "failed"]
     text: str | None = Field(default=None, max_length=20_000)
     code: str | None = Field(default=None, max_length=60)
     message: str | None = Field(default=None, max_length=500)
@@ -54,6 +54,7 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
     if already is not None:
         return True, []
     db.add(RunEvent(invocation_id=invocation_id, sequence=event.sequence, event_type=event.type))
+    invocation.last_activity_at = utcnow()  # every event, including heartbeats, proves the run is alive
 
     agent = db.get(Agent, invocation.agent_id)
     if agent is None:
@@ -63,6 +64,31 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
 
     if event.type == "started":
         _mark_running(invocation)
+    elif event.type == "heartbeat":
+        pass  # liveness only; nothing to show
+    elif event.type == "progress":
+        _mark_running(invocation)
+        scope = session_scope(db, invocation)
+        publish.append(
+            (
+                project_id,
+                {
+                    "event_id": str(uuid.uuid4()),
+                    "schema_version": 1,
+                    "event_type": "agent.invocation.progress",
+                    "project_id": str(project_id),
+                    "sequence": None,
+                    "occurred_at": utcnow().isoformat(),
+                    "actor_user_id": None,
+                    **{key: scope.get(key) for key in ("visibility", "owner_user_id", "session_id")},
+                    "payload": {
+                        "invocation_id": str(invocation.id),
+                        "agent_handle": agent.handle,
+                        "stage": (event.text or "")[:200],
+                    },
+                },
+            )
+        )
     elif event.type == "output":
         _mark_running(invocation)
         scope = session_scope(db, invocation)

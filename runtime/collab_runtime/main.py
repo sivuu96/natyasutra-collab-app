@@ -10,8 +10,10 @@ import shlex
 import signal
 import sys
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -33,6 +35,7 @@ class Config:
     claude_binary: str
     timeout_seconds: float
     github_key_secret_name: str = "github-app-key"
+    heartbeat_seconds: float = 30.0
     github_app_id: str | None = None
     github_installation_id: str | None = None
 
@@ -46,6 +49,7 @@ class Config:
             claude_binary=env.get("CLAUDE_BINARY", "claude"),
             timeout_seconds=float(env.get("RUN_TIMEOUT_SECONDS", "1500")),
             github_key_secret_name=env.get("GITHUB_KEY_SECRET_NAME", "github-app-key"),
+            heartbeat_seconds=float(env.get("HEARTBEAT_SECONDS", "30")),
             github_app_id=env.get("GITHUB_APP_ID") or None,
             github_installation_id=env.get("GITHUB_INSTALLATION_ID") or None,
         )
@@ -58,11 +62,42 @@ class Sequencer:
         self._hub = hub
         self._token = runtime_token
         self._next = 0
+        self._lock = threading.Lock()
 
     def send(self, event_type: str, **fields: object) -> None:
-        event = {"sequence": self._next, "type": event_type, **{k: v for k, v in fields.items() if v is not None}}
-        self._hub.post_event(runtime_token=self._token, event=event)
-        self._next += 1
+        # The lock keeps sequence numbers unique and in order when the heartbeat thread also sends.
+        with self._lock:
+            event = {"sequence": self._next, "type": event_type, **{k: v for k, v in fields.items() if v is not None}}
+            self._hub.post_event(runtime_token=self._token, event=event)
+            self._next += 1
+
+
+class Heartbeat:
+    """Sends a liveness event on an interval, so the hub can tell a quiet run from a dead one."""
+
+    def __init__(self, sequencer: Sequencer, interval: float, on_finished: Callable[[], None]) -> None:
+        self._sequencer = sequencer
+        self._interval = interval
+        self._on_finished = on_finished
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, name="heartbeat", daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self._sequencer.send("heartbeat")
+            except HubError as error:
+                if error.code == "run_finished":
+                    self._on_finished()  # the hub ended the run: stop the agent, report nothing further
+                    return
+                log.warning("heartbeat not delivered: %s", error.code)
 
 
 def run(
@@ -88,6 +123,31 @@ def run(
         return 3  # no runtime token exists, so the run cannot be reported; the hub's run timeout handles it
 
     sequencer = Sequencer(hub, context["runtime_token"])
+    finished = threading.Event()
+
+    def stop_agent() -> None:
+        finished.set()
+        runner.terminate()
+
+    heartbeat = Heartbeat(sequencer, config.heartbeat_seconds, on_finished=stop_agent)
+    heartbeat.start()
+    try:
+        return _report_run(config, context, sequencer, hub, read_secret, runner, prepare_repo, finished)
+    finally:
+        heartbeat.stop()
+
+
+def _report_run(
+    config: Config,
+    context: dict[str, Any],
+    sequencer: Sequencer,
+    hub: HubClient,
+    read_secret: Callable[[str, str], str],
+    runner: ClaudeRunner,
+    prepare_repo: Callable[[str, str, str], None] | None,
+    run_finished: threading.Event,
+) -> int:
+    """Work the run and report every step. Returns the exit code."""
     try:
         sequencer.send("started")
         if context.get("harness") not in SUPPORTED_HARNESSES:
@@ -110,6 +170,7 @@ def run(
                     sequencer.send("failed", code="repo_unavailable", message="Repository access is not configured.")
                     return 1
                 repo_dir = os.path.join(workdir, "repo")
+                sequencer.send("progress", text=f"Preparing the repository {repository}")
                 try:
                     prepare_repo(repository, ref, repo_dir)
                 except GitHubError as error:
@@ -120,16 +181,33 @@ def run(
             command = build_claude_args(
                 shlex.split(config.claude_binary), model=config.claude_model, prompt=context["prompt"]
             )
+
+            def emit(text: str) -> None:
+                if run_finished.is_set():
+                    return
+                try:
+                    sequencer.send("output", text=text)
+                except HubError as error:
+                    if error.code != "run_finished":
+                        raise
+                    # The run was cancelled or timed out on the hub. Stop the agent; nothing else to report.
+                    run_finished.set()
+                    runner.terminate()
+
+            sequencer.send("progress", text="Running the agent")
             outcome = runner.run(
                 command=command,
                 api_key=api_key,
                 workdir=workdir,
                 cwd=cwd,
-                emit_text=lambda text: sequencer.send("output", text=text),
+                emit_text=emit,
             )
+        if run_finished.is_set():
+            return 0
         api_key = ""  # drop the reference as soon as the harness has finished
 
         if outcome.ok:
+            sequencer.send("progress", text="Writing the reply")
             if outcome.final_text:
                 sequencer.send("message", text=outcome.final_text)
             sequencer.send("completed", harness_session_ref=outcome.session_id)

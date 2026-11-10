@@ -129,6 +129,9 @@ def upsert_agents_from_hello(db: Session, device: BridgeDevice, hello: HelloPayl
         if not HANDLE_RE.match(descriptor.handle):
             refused.append(descriptor.handle)
             continue
+        if db.scalar(select(User.id).where(User.handle == descriptor.handle)) is not None:
+            refused.append(descriptor.handle)  # a person already has this handle
+            continue
         existing = db.scalar(select(Agent).where(Agent.handle == descriptor.handle))
         if existing is not None and existing.owner_user_id != device.owner_user_id:
             # Handles are global. Another user already owns this one; never take it over.
@@ -840,8 +843,11 @@ def request_cancel(db: Session, invocation: AgentInvocation, actor: User) -> Out
     if invocation.status in {s.value for s in TERMINAL_INVOCATION_STATUSES}:
         return outcome
     agent = db.get(Agent, invocation.agent_id)
-    device = db.get(BridgeDevice, agent.device_id) if agent else None
-    if invocation.status == InvocationStatus.QUEUED.value or device is None or not device_is_online(device):
+    device = db.get(BridgeDevice, agent.device_id) if agent and agent.device_id else None
+    if agent is not None and agent.device_id is None:
+        # Cloud run: mark it cancelled now. The outbox worker asks the provider to stop the execution.
+        _set_status(invocation, InvocationStatus.CANCELLED)
+    elif invocation.status == InvocationStatus.QUEUED.value or device is None or not device_is_online(device):
         if invocation.status == InvocationStatus.QUEUED.value:
             _set_status(invocation, InvocationStatus.CANCELLED)
         else:

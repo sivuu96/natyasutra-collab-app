@@ -79,6 +79,7 @@ class MemberOut(BaseModel):
     email: str
     display_name: str
     role: str
+    handle: str | None = None
 
 
 # ---- discussions ------------------------------------------------------------------------------

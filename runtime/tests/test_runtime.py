@@ -316,3 +316,64 @@ def test_hub_client_stops_retrying_on_a_refusal() -> None:
 def test_main_reports_a_missing_configuration_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HUB_BASE_URL", raising=False)
     assert runtime_main.main() == 2
+
+
+SLOW_SUCCESS_HARNESS = """
+import json, time
+time.sleep(0.7)
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok", "session_id": "s"}), flush=True)
+"""
+
+NOISY_HARNESS = """
+import json, time
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "first"}]}}), flush=True)
+time.sleep(20)
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "never sent"}]}}), flush=True)
+"""
+
+
+class RunFinishedAfterFirstOutput(FakeHub):
+    """Behaves like a hub that cancelled the run after its first output: every later event is refused."""
+
+    def post_event(self, *, runtime_token: str, event: dict[str, Any]) -> None:
+        if any(e["type"] == "output" for e in self.events):
+            raise HubError(409, "run_finished")  # every event after the cancellation is refused
+        super().post_event(runtime_token=runtime_token, event=event)
+
+
+def test_heartbeats_and_progress_are_sent_while_the_agent_works(tmp_path: Path) -> None:
+    hub = FakeHub()
+    config = _config(_write_fake_harness(tmp_path, SLOW_SUCCESS_HARNESS))
+    config = Config(**{**config.__dict__, "heartbeat_seconds": 0.05})
+    code = run(
+        config,
+        env=_env(),
+        hub=hub,  # type: ignore[arg-type]
+        read_secret=lambda _p, _n: API_KEY,
+        runner=ClaudeRunner(timeout_seconds=20),
+    )
+    assert code == 0
+    types = [event["type"] for event in hub.events]
+    assert "heartbeat" in types
+    assert any(e["type"] == "progress" and e["text"] == "Running the agent" for e in hub.events)
+    assert [e["sequence"] for e in hub.events] == sorted(e["sequence"] for e in hub.events)
+    assert len({e["sequence"] for e in hub.events}) == len(hub.events)
+
+
+def test_a_run_cancelled_on_the_hub_stops_the_agent_promptly(tmp_path: Path) -> None:
+    import time
+
+    hub = RunFinishedAfterFirstOutput()
+    started = time.monotonic()
+    config = _config(_write_fake_harness(tmp_path, NOISY_HARNESS))
+    config = Config(**{**config.__dict__, "heartbeat_seconds": 0.2})
+    code = run(
+        config,
+        env=_env(),
+        hub=hub,  # type: ignore[arg-type]
+        read_secret=lambda _p, _n: API_KEY,
+        runner=ClaudeRunner(timeout_seconds=60),
+    )
+    assert code == 0
+    assert time.monotonic() - started < 15  # the 20-second sleep was cut short
+    assert all("never sent" not in str(e) for e in hub.events)

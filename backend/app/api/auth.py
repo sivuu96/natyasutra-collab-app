@@ -24,6 +24,7 @@ from app.deps import (
 from app.models import AuthSession, User
 from app.models.enums import AuditOutcome
 from app.services.audit import record_audit
+from app.services.handles import allocate_user_handle
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -74,7 +75,12 @@ def register(
         # Generic message: do not confirm which emails are registered.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration failed")
 
-    user = User(email=email, display_name=payload.display_name.strip(), password_hash=hash_password(payload.password))
+    user = User(
+        email=email,
+        display_name=payload.display_name.strip(),
+        password_hash=hash_password(payload.password),
+        handle=allocate_user_handle(db, email),
+    )
     db.add(user)
     db.flush()
     record_audit(

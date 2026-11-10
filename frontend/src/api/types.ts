@@ -27,6 +27,7 @@ export interface Member {
   email: string;
   display_name: string;
   role: ProjectRole;
+  handle: string | null;
 }
 
 export interface Channel {

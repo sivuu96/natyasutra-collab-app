@@ -160,7 +160,10 @@ def _members(db: Session, project_id: uuid.UUID) -> list[MemberOut]:
         .where(ProjectMembership.project_id == project_id)
         .order_by(User.display_name)
     ).all()
-    return [MemberOut(user_id=u.id, email=u.email, display_name=u.display_name, role=m.role) for m, u in rows]
+    return [
+        MemberOut(user_id=u.id, email=u.email, display_name=u.display_name, role=m.role, handle=u.handle)
+        for m, u in rows
+    ]
 
 
 @router.get("/projects/{project_id}/members", response_model=list[MemberOut])
