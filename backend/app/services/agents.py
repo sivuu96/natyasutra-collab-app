@@ -220,7 +220,7 @@ def create_invocations_for_message(
         )
         db.add(invocation)
         db.flush()
-        if execution_mode != "bridge":
+        if is_cloud_agent(agent, execution_mode):
             enqueue_dispatch(db, invocation.id)  # same transaction as the invocation
         record_audit(
             db,
@@ -282,7 +282,7 @@ def create_session_turn(
     )
     db.add(invocation)
     db.flush()
-    if execution_mode != "bridge":
+    if is_cloud_agent(agent, execution_mode):
         enqueue_dispatch(db, invocation.id)
     session.last_activity_at = utcnow()
     record_audit(
@@ -316,8 +316,8 @@ def create_session_turn(
 def _initial_status(
     db: Session, agent: Agent, queue_if_offline: bool, execution_mode: str
 ) -> tuple[InvocationStatus, str | None]:
-    """Cloud runs are always queued: the outbox worker starts them. Bridge runs depend on device presence."""
-    if execution_mode != "bridge":
+    """Cloud agents (no bridge device) are queued for the outbox worker. Bridge agents depend on device presence."""
+    if is_cloud_agent(agent, execution_mode):
         return InvocationStatus.QUEUED, None
     device = db.get(BridgeDevice, agent.device_id) if agent.device_id else None
     online = device is not None and device_is_online(device)
@@ -326,10 +326,14 @@ def _initial_status(
     return InvocationStatus.REJECTED, "agent_offline"
 
 
+def is_cloud_agent(agent: Agent, execution_mode: str) -> bool:
+    """True when this agent's runs go to the execution provider. Agents with a bridge device never do."""
+    return execution_mode != "bridge" and agent.device_id is None
+
+
 def dispatch_for_mode(db: Session, invocation_ids: list[uuid.UUID], execution_mode: str) -> Outcome:
-    """Bridge mode hands work to connected devices now. Other modes leave it to the outbox worker."""
-    if execution_mode != "bridge":
-        return Outcome()
+    """Hand bridge work to connected devices now. Cloud agents have no device, so they are left to the worker."""
+    del execution_mode  # the device check in dispatch_invocations already separates the two kinds
     return dispatch_invocations(db, invocation_ids)
 
 
@@ -341,7 +345,7 @@ def dispatch_invocations(db: Session, invocation_ids: list[uuid.UUID]) -> Outcom
         if invocation is None or invocation.status != InvocationStatus.QUEUED.value:
             continue
         agent = db.get(Agent, invocation.agent_id)
-        device = db.get(BridgeDevice, agent.device_id) if agent else None
+        device = db.get(BridgeDevice, agent.device_id) if agent and agent.device_id else None
         if agent is None or device is None or not device_is_online(device):
             continue  # stays queued (queue_if_offline) until the device connects
         requester = db.get(User, invocation.requested_by_user_id) if invocation.requested_by_user_id else None

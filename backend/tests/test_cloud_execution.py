@@ -208,3 +208,42 @@ def test_mention_is_queued_and_the_worker_delivers_it(fake_app: FastAPI, fake_cl
         outbox = db.scalar(select(ExecutionOutbox).where(ExecutionOutbox.invocation_id == invocation_id))
         assert outbox is not None and outbox.status == "done"
     assert [s[0] for s in provider.submitted] == [invocation_id]  # type: ignore[attr-defined]
+
+
+def test_bridge_agents_are_not_sent_to_the_cloud_even_in_cloud_mode(fake_app: FastAPI, fake_client: TestClient) -> None:
+    from app.models.bridge import BridgeDevice
+
+    owner = register(fake_client, "bridge-owner@example.com", "Owner")
+    project = create_project(fake_client, "Mixed project")
+    project_id = project["id"]
+    channel_id = general_channel(fake_client, project_id)
+    owner_id = uuid.UUID(owner["id"])
+    with fake_app.state.session_factory() as db:
+        device = BridgeDevice(owner_user_id=owner_id, name="Laptop", secret_hash="x" * 64)
+        db.add(device)
+        db.flush()
+        agent = Agent(
+            owner_user_id=owner_id,
+            device_id=device.id,  # a bridge agent: its runs stay on the developer machine
+            handle="laptopclaude",
+            display_name="Laptop Claude",
+            harness="claude_code",
+            capabilities=[],
+        )
+        db.add(agent)
+        db.flush()
+        db.add(ProjectAgent(project_id=uuid.UUID(project_id), agent_id=agent.id, added_by_user_id=owner_id))
+        db.commit()
+
+    response = fake_client.post(
+        f"{API}/projects/{project_id}/channels/{channel_id}/messages",
+        json={"body": "@laptopclaude hello"},
+        headers=csrf_headers(fake_client),
+    )
+    assert response.status_code == 201, response.text
+
+    with fake_app.state.session_factory() as db:
+        invocation = db.scalar(select(AgentInvocation).where(AgentInvocation.agent_id == agent.id))
+        assert invocation is not None
+        assert db.scalar(select(ExecutionOutbox).where(ExecutionOutbox.invocation_id == invocation.id)) is None
+    assert fake_app.state.execution_provider.submitted == []  # type: ignore[union-attr]
