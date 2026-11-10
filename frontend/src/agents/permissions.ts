@@ -11,19 +11,9 @@ export interface AgentActor {
   role: ProjectRole;
 }
 
-/** Approvals belong to the agent's owner and to project admins. */
-export function canDecideApproval(actor: AgentActor, agentOwnerId: string): boolean {
-  return actor.userId === agentOwnerId || RANK[actor.role] >= RANK.admin;
-}
-
 /** Attaching: the agent's owner (members and up), or an admin. */
 export function canAttachAgent(actor: AgentActor, agentOwnerId: string): boolean {
   if (RANK[actor.role] < RANK.member) return false;
-  return actor.userId === agentOwnerId || RANK[actor.role] >= RANK.admin;
-}
-
-/** Detaching: the agent's owner, or an admin. */
-export function canDetachAgent(actor: AgentActor, agentOwnerId: string): boolean {
   return actor.userId === agentOwnerId || RANK[actor.role] >= RANK.admin;
 }
 
@@ -32,7 +22,7 @@ export function canCancelInvocation(actor: AgentActor, requesterId: string | nul
   return actor.userId === requesterId || actor.userId === agentOwnerId || RANK[actor.role] >= RANK.admin;
 }
 
-export const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "rejected"]);
+export const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 export function isActive(status: string): boolean {
   return !TERMINAL_STATUSES.has(status);

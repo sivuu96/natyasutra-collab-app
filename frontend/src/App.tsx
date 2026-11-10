@@ -5,7 +5,6 @@ import { Button } from "./components/ui";
 import { ActivityView } from "./pages/ActivityView";
 import { AgentsView } from "./pages/AgentsView";
 import { DecisionsView } from "./pages/DecisionsView";
-import { DevicesPage } from "./pages/DevicesPage";
 import { DiscussionsView } from "./pages/DiscussionsView";
 import { LoginPage } from "./pages/LoginPage";
 import { PeopleView } from "./pages/PeopleView";
@@ -34,9 +33,6 @@ function Shell({ children }: { children: ReactNode }) {
         </Link>
         {user && (
           <div className="flex items-center gap-3 text-sm">
-            <Link to="/devices" className="text-amber-800 hover:underline">
-              Devices
-            </Link>
             <span className="hidden text-stone-600 sm:inline">{user.display_name}</span>
             <Button variant="secondary" onClick={() => void logout()}>
               Sign out
@@ -77,16 +73,6 @@ export function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/" element={<ProjectsRoute />} />
-          <Route
-            path="/devices"
-            element={
-              <RequireAuth>
-                <Shell>
-                  <DevicesPage />
-                </Shell>
-              </RequireAuth>
-            }
-          />
           <Route path="/projects/:projectId" element={<WorkspaceRoute />}>
             <Route index element={<Navigate to="discussions" replace />} />
             <Route path="discussions" element={<DiscussionsView />} />

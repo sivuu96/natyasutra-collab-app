@@ -119,36 +119,24 @@ export interface ProjectAgent {
   agent_id: string;
   handle: string;
   display_name: string;
-  harness: "claude_code" | "codex";
+  harness: "claude_code";
   description: string | null;
-  capabilities: string[];
   owner_user_id: string;
   owner_display_name: string;
-  online: boolean;
 }
 
 export interface MyAgent {
   id: string;
   handle: string;
   display_name: string;
-  harness: "claude_code" | "codex";
+  harness: "claude_code";
   description: string | null;
-  device_id: string;
-  device_name: string;
-  online: boolean;
+  repository_full_name: string | null;
+  default_ref: string | null;
   revoked: boolean;
 }
 
-export type InvocationStatus =
-  | "queued"
-  | "delivered"
-  | "accepted"
-  | "running"
-  | "awaiting_approval"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "rejected";
+export type InvocationStatus = "queued" | "accepted" | "running" | "completed" | "failed" | "cancelled";
 
 export interface Invocation {
   id: string;
@@ -158,23 +146,10 @@ export interface Invocation {
   session_id: string | null;
   requested_by_user_id: string | null;
   status: InvocationStatus;
-  queued_if_offline: boolean;
   error_code: string | null;
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
-}
-
-export interface Approval {
-  id: string;
-  invocation_id: string;
-  agent_id: string;
-  agent_handle: string;
-  operation: string;
-  tools: string[];
-  detail: string | null;
-  status: "pending" | "approved" | "denied";
-  created_at: string;
 }
 
 export interface AgentSession {
@@ -206,20 +181,6 @@ export interface SessionTurn {
   invocation_id: string;
   status: InvocationStatus;
   error_code: string | null;
-}
-
-export interface Device {
-  id: string;
-  name: string;
-  created_at: string;
-  last_seen_at: string | null;
-  revoked_at: string | null;
-  online: boolean;
-}
-
-export interface PairingCode {
-  code: string;
-  expires_at: string;
 }
 
 export interface SearchResults {

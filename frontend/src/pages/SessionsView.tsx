@@ -103,12 +103,11 @@ export function SessionsView() {
     if (!selected || !draft.trim()) return;
     setError(null);
     try {
-      const turn = await api<SessionTurn>(`/projects/${project.id}/sessions/${selected.id}/turns`, {
+      await api<SessionTurn>(`/projects/${project.id}/sessions/${selected.id}/turns`, {
         method: "POST",
         json: { body: draft.trim() },
       });
       setDraft("");
-      if (turn.status === "rejected") setError("The agent is offline, so this message was not delivered to it.");
       await loadSelected();
     } catch (err) {
       setError(errorMessage(err));
@@ -191,7 +190,6 @@ export function SessionsView() {
                   {agents.map((a) => (
                     <option key={a.agent_id} value={a.agent_id}>
                       @{a.handle}
-                      {a.online ? "" : " (offline)"}
                     </option>
                   ))}
                 </Select>
@@ -308,10 +306,7 @@ export function SessionsView() {
           </p>
           <p>Starting a new session starts a new conversation with no earlier turns.</p>
           <p>Private sessions are visible only to you. Sharing lets project members read and watch, but not write.</p>
-          <p>
-            An agent on a team member’s machine does not get a message while it is offline, unless you choose to queue
-            it. Cloud agents run when you send a message.
-          </p>
+          <p>Each message starts a run on the agent’s cloud runtime. The reply appears in the transcript when it finishes.</p>
           {canWrite && <p>Mentions in channels are one-off requests; sessions are conversations.</p>}
         </Card>
         {requests.length > 0 && <p className="text-xs text-stone-400">{requests.length} recent requests</p>}

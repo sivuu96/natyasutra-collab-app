@@ -24,7 +24,7 @@ describe("activeMention", () => {
 describe("suggestMentions", () => {
   const agents = [
     { handle: "claude", displayName: "Claude", kind: "agent" as const },
-    { handle: "codex", displayName: "Codex", kind: "agent" as const },
+    { handle: "docs-helper", displayName: "Docs", kind: "agent" as const },
     { handle: "claude-review", displayName: "Review", kind: "agent" as const },
   ];
 
@@ -96,11 +96,11 @@ describe("queued runs", () => {
     expect(state.q1).toEqual({ invocationId: "q1", agentHandle: "claude", stage: "Queued", updatedAt: 5 });
   });
 
-  it("ignores runs created already rejected", () => {
+  it("ignores runs created already failed", () => {
     const state: RunProgressMap = {};
     expect(applyRunEvent(state, {
       event_type: "agent.invocation.created",
-      payload: { invocation_id: "q2", agent_handle: "claude", status: "rejected" },
+      payload: { invocation_id: "q2", agent_handle: "claude", status: "failed" },
     })).toBe(state);
   });
 });
