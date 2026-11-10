@@ -70,7 +70,7 @@ All routes are under `/api/v1`. Project routes check membership on every request
 |---|---|
 | Auth | `POST /register`, `POST /login`, `POST /logout`, `GET /me` |
 | Teams and projects | `GET/POST /teams`, `POST /teams/{id}/projects`, `GET /projects`, `GET /projects/{id}`, `GET/POST /projects/{id}/members`, `PATCH/DELETE /projects/{id}/members/{user}` |
-| Channels and messages | `GET/POST /projects/{id}/channels`, `GET /projects/{id}/channels/{channel}/messages`, `POST` to post, `PATCH`/`DELETE /projects/{id}/messages/{message}` |
+| Channels and messages | `GET/POST /projects/{id}/channels`, `GET/POST /projects/{id}/channels/{channel}/messages`, `PATCH`/`DELETE /projects/{id}/messages/{message}` |
 | Tasks and decisions | `GET/POST /projects/{id}/tasks`, `GET/PATCH /projects/{id}/tasks/{task}`, `GET/POST /projects/{id}/decisions`, `GET/PATCH /projects/{id}/decisions/{decision}`, `GET /projects/{id}/decisions/{decision}/revisions` |
 | Activity, audit, search | `GET /projects/{id}/activity`, `GET /projects/{id}/audit`, `GET /projects/{id}/search` |
 | Agents | `GET /me/agents`, `GET/POST /projects/{id}/agents`, `GET /projects/{id}/invocations`, `POST /projects/{id}/invocations/{invocation}/cancel` |
