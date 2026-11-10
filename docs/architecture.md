@@ -184,6 +184,10 @@ Data model: `agent_sessions` (owner, agent, title, visibility, harness session r
 
 Harness continuity: a session stores the harness's own session id from the first turn's completion, and sends it with every later turn. Claude Code resumes with `--resume`; Codex with `thread/resume`.
 
+Cloud agents (Cloud Run Jobs) do not resume. Each run starts in a fresh container, so the harness's session files are gone when the run ends. Instead, the lease exchange builds the run's prompt from the session's earlier turns (`app/services/transcript.py`), capped at 40 turns and 20,000 characters. The transcript comes from the hub's own rows, and the invocation's stored prompt stays the bare message. Long sessions lose their oldest turns once the cap is reached.
+
+Possible next step: if the cloud agents need longer memory, run them as Cloud Run **services** instead of jobs. An instance can keep the harness's session files between messages while it stays up, so `--resume` could work for most turns. Cloud Run can still stop or replace an instance at any time, so the replay above would stay as the fallback. Before choosing that, weigh the cost of a warm instance against per-run jobs, and where the session files would be kept. They can include repository content the agent read, so they need the same retention and deletion rules as the transcript.
+
 Privacy, enforced in four places:
 - REST: sessions, transcripts, turns, and invocations are filtered in the query. Other members get 404, not 403.
 - Live: each event carries its session's `visibility` and `owner_user_id`. The realtime handler delivers private events only to the owner, both on replay and live, and this includes streamed output deltas.
