@@ -247,3 +247,8 @@ def test_bridge_agents_are_not_sent_to_the_cloud_even_in_cloud_mode(fake_app: Fa
         assert invocation is not None
         assert db.scalar(select(ExecutionOutbox).where(ExecutionOutbox.invocation_id == invocation.id)) is None
     assert fake_app.state.execution_provider.submitted == []  # type: ignore[union-attr]
+
+
+def test_cancelling_a_finished_execution_is_not_an_error() -> None:
+    provider = _provider(lambda _r: httpx.Response(400, json={"error": {"message": "already completed"}}))
+    provider.cancel(EXECUTION_NAME)  # must not raise: there is nothing left to stop

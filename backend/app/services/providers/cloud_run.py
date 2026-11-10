@@ -91,7 +91,9 @@ class CloudRunJobsProvider:
             response = self._http.post(f"{RUN_API}/{provider_execution_id}:cancel", headers=self._headers(), json={})
         except httpx.HTTPError as error:
             raise ProviderError(f"cancel transport error: {type(error).__name__}") from error
-        if response.status_code == 404:
+        # 404: gone. 400/409: the execution has already finished, so there is nothing left to stop.
+        # Both mean the goal is met; retrying would never succeed.
+        if response.status_code in (400, 404, 409):
             return
         if response.status_code >= 400:
             raise ProviderError(f"cancel returned HTTP {response.status_code}")
