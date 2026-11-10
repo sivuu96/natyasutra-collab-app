@@ -27,7 +27,7 @@ def redact(text: str, api_key: str) -> str:
 
 
 def build_claude_args(binary: list[str], *, model: str, prompt: str) -> list[str]:
-    # Same argument order the bridge uses for Claude Code, plus an explicit model.
+    # Read-only tools, the prompt last, then the output format; plus an explicit model.
     return [
         *binary,
         "--allowedTools",

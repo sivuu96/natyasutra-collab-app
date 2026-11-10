@@ -156,7 +156,7 @@ def test_decision_starts_proposed_with_revision_history(team) -> None:  # type: 
     decision = m.post(
         f"{API}/projects/{pid}/decisions",
         json={
-            "title": "Use Codex app-server",
+            "title": "Use the run lease design",
             "statement": "Adopt stdio app-server",
             "options": [{"name": "websocket"}, {"name": "stdio"}],
         },

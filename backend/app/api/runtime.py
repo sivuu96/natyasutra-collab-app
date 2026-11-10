@@ -50,7 +50,7 @@ def exchange(
             db,
             lease_token=_bearer(authorization),
             execution_name=payload.execution_name,
-            runtime_secret=request.app.state.settings.bridge_token_secret,
+            runtime_secret=request.app.state.settings.runtime_token_secret,
             allowed_repos=frozenset(request.app.state.settings.github_allowed_repos),
         )
     except LeaseError as error:
@@ -76,7 +76,7 @@ def post_event(
 ) -> dict[str, bool]:
     """Report progress for a run. The runtime token names the run; a repeated sequence number is a no-op."""
     try:
-        invocation_id = verify_runtime_token(request.app.state.settings.bridge_token_secret, _bearer(authorization))
+        invocation_id = verify_runtime_token(request.app.state.settings.runtime_token_secret, _bearer(authorization))
     except jwt.PyJWTError as error:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_runtime_token") from error
     try:

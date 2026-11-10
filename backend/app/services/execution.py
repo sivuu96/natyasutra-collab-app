@@ -1,6 +1,6 @@
 """Execution provider interface and the outbox worker that starts runs through it.
 
-Rules (see docs/AGENT_RUNTIME_MIGRATION_SPEC.md):
+Rules:
 - Provider calls never run inside a database transaction. The worker claims a row (committed), mints a
   one-use run lease (committed), calls the provider, then records the outcome in a further transaction.
 - Every submit carries the outbox `dedupe_key` as the provider's idempotency key.
@@ -20,7 +20,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utcnow
-from app.models.bridge import AgentInvocation
+from app.models.agents import AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import ExecutionOutbox, InvocationLease
 
@@ -221,16 +221,13 @@ def process_once(
                 row.status = "done"
                 row.provider_execution_id = execution_id
                 row.completed_at = utcnow()
-                row.last_error = None
-                if invocation.status == InvocationStatus.QUEUED.value:
-                    invocation.status = InvocationStatus.DELIVERED.value
-                    invocation.delivered_at = utcnow()
+                row.last_error = None  # the invocation stays queued until the runtime exchanges its lease
             else:
                 row.last_error = error
                 if row.attempts >= max_attempts:
                     row.status = "dead"
                     row.completed_at = utcnow()
-                    if invocation.status in (InvocationStatus.QUEUED.value, InvocationStatus.DELIVERED.value):
+                    if invocation.status == InvocationStatus.QUEUED.value:
                         invocation.status = InvocationStatus.FAILED.value
                         invocation.error_code = "dispatch_failed"
                         invocation.error_message = "The agent runtime did not accept the run."

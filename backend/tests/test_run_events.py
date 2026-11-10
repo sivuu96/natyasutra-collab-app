@@ -10,7 +10,7 @@ from helpers import API
 from sqlalchemy import select
 from test_run_lease import _exchange, _start_run
 
-from app.models.bridge import AgentInvocation
+from app.models.agents import AgentInvocation
 from app.models.enums import InvocationStatus
 from app.models.execution import RunEvent
 from app.models.work import Message
@@ -38,7 +38,7 @@ def test_a_full_run_is_recorded_and_its_reply_is_saved_as_a_channel_message(
     assert (
         _post(fake_client, token, {"sequence": 2, "type": "message", "text": "Here is the summary."}).status_code == 200
     )
-    done = _post(fake_client, token, {"sequence": 3, "type": "completed", "harness_session_ref": "sess-9"})
+    done = _post(fake_client, token, {"sequence": 3, "type": "completed"})
     assert done.status_code == 200
 
     with fake_app.state.session_factory() as db:
@@ -46,7 +46,6 @@ def test_a_full_run_is_recorded_and_its_reply_is_saved_as_a_channel_message(
         assert invocation is not None
         assert invocation.status == InvocationStatus.COMPLETED.value
         assert invocation.completed_at is not None
-        assert invocation.harness_session_ref == "sess-9"
         message = db.get(Message, invocation.result_message_id)
         assert message is not None
         assert message.body == "Here is the summary."

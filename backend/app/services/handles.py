@@ -6,7 +6,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.bridge import Agent
+from app.models.agents import Agent
 from app.models.identity import User
 
 HANDLE_MAX = 30

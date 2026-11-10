@@ -42,30 +42,20 @@ class DecisionStatus(StrEnum):
 
 class HarnessType(StrEnum):
     CLAUDE_CODE = "claude_code"
-    CODEX = "codex"
 
 
 class InvocationStatus(StrEnum):
-    QUEUED = "queued"  # stored; bridge offline and sender chose to queue
-    DELIVERED = "delivered"  # bridge received the frame over its socket
-    ACCEPTED = "accepted"  # bridge validated the request and will run it
-    RUNNING = "running"  # harness is producing output
-    AWAITING_APPROVAL = "awaiting_approval"
+    QUEUED = "queued"  # waiting for the execution worker to start the run
+    ACCEPTED = "accepted"  # the run's runtime exchanged its lease and is working
+    RUNNING = "running"  # the agent is producing output
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    REJECTED = "rejected"  # bridge refused (policy, unknown agent, bad path)
 
 
 TERMINAL_INVOCATION_STATUSES = frozenset(
-    {InvocationStatus.COMPLETED, InvocationStatus.FAILED, InvocationStatus.CANCELLED, InvocationStatus.REJECTED}
+    {InvocationStatus.COMPLETED, InvocationStatus.FAILED, InvocationStatus.CANCELLED}
 )
-
-
-class ApprovalStatus(StrEnum):
-    PENDING = "pending"
-    APPROVED = "approved"
-    DENIED = "denied"
 
 
 class SessionVisibility(StrEnum):

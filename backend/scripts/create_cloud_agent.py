@@ -4,8 +4,8 @@ Usage (from backend/, with DATABASE_URL set to the hub database):
     python -m scripts.create_cloud_agent --email you@example.com --handle claude \
         --project-slug port-natyasutra --repo sivuu96/Natyasutra --ref main [--dry-run]
 
-The agent has no bridge device, so its runs go to the execution provider. The repository must be on
-GITHUB_ALLOWED_REPOS. The owner must already be a member of the project. Writes are audited.
+Its runs go to the execution provider. The repository must be on GITHUB_ALLOWED_REPOS. The owner must already be
+a member of the project. Writes are audited.
 """
 
 import argparse
@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.db.session import make_engine, make_session_factory
-from app.models.bridge import Agent, ProjectAgent
+from app.models.agents import Agent, ProjectAgent
 from app.models.identity import User
 from app.models.projects import Project, ProjectMembership
 from app.services.audit import record_audit
@@ -81,11 +81,9 @@ def main(argv: list[str] | None = None) -> int:
 
             agent = Agent(
                 owner_user_id=user.id,
-                device_id=None,
                 handle=args.handle,
                 display_name=args.display_name or f"{args.handle} (cloud)",
                 harness="claude_code",
-                capabilities=[],
                 repository_full_name=args.repo,
                 default_ref=args.ref,
             )

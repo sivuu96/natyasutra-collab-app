@@ -13,21 +13,21 @@ from app.main import create_app
 SECRET = "x" * 40
 
 
-def test_production_requires_a_bridge_secret() -> None:
-    with pytest.raises(ValueError, match="BRIDGE_TOKEN_SECRET"):
-        Settings(environment="production", database_url="postgresql+psycopg://u:p@h/db", bridge_token_secret=None)
+def test_production_requires_a_runtime_token_secret() -> None:
+    with pytest.raises(ValueError, match="RUNTIME_TOKEN_SECRET"):
+        Settings(environment="production", database_url="postgresql+psycopg://u:p@h/db", runtime_token_secret=None)
 
 
 def test_production_refuses_short_secrets_and_sqlite() -> None:
     with pytest.raises(ValueError):
-        Settings(environment="production", database_url="postgresql+psycopg://u:p@h/db", bridge_token_secret="short")
+        Settings(environment="production", database_url="postgresql+psycopg://u:p@h/db", runtime_token_secret="short")
     with pytest.raises(ValueError, match="PostgreSQL"):
-        Settings(environment="production", database_url="sqlite:///x.db", bridge_token_secret=SECRET)
+        Settings(environment="production", database_url="sqlite:///x.db", runtime_token_secret=SECRET)
 
 
 def test_production_settings_load_when_correct() -> None:
     settings = Settings(
-        environment="production", database_url="postgresql+psycopg://u:p@h/db", bridge_token_secret=SECRET
+        environment="production", database_url="postgresql+psycopg://u:p@h/db", runtime_token_secret=SECRET
     )
     assert settings.cookie_secure is True
 
@@ -119,7 +119,7 @@ def test_hsts_only_in_production(tmp_path: Path) -> None:
     settings = Settings(
         environment="production",
         database_url="postgresql+psycopg://u:p@h/db",
-        bridge_token_secret=SECRET,
+        runtime_token_secret=SECRET,
         log_level="WARNING",
     )
     engine = make_engine("sqlite:///:memory:")

@@ -209,7 +209,6 @@ def test_a_successful_run_reports_started_output_message_and_completed(tmp_path:
     assert types[-2:] == ["message", "completed"]
     assert [event["sequence"] for event in hub.events] == list(range(len(hub.events)))
     assert all(API_KEY not in str(event) for event in hub.events)
-    assert hub.events[-1]["harness_session_ref"] == "sess-1"
 
 
 def test_the_lease_is_removed_from_the_environment_before_work_starts(tmp_path: Path) -> None:

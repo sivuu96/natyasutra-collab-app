@@ -1,6 +1,6 @@
 """Prompt for a session turn that runs in the cloud, where the harness has no memory of earlier turns.
 
-A cloud run starts in a fresh container, so Claude Code cannot resume a stored thread the way the bridge does.
+A cloud run starts in a fresh container, so Claude Code cannot resume a session from an earlier run.
 Instead the run's prompt carries the session's earlier turns, followed by the new message. The transcript
 is built at exchange time from the session's own rows, so it is never stored in the invocation's prompt
 (which is broadcast in realtime events).
@@ -11,7 +11,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.bridge import Agent, AgentInvocation
+from app.models.agents import Agent, AgentInvocation
 from app.models.identity import User
 from app.models.sessions import AgentSessionMessage
 

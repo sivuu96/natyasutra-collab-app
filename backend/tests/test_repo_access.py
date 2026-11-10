@@ -10,7 +10,7 @@ from test_run_lease import _exchange, _start_run
 
 from app.core.config import Settings
 from app.main import create_app
-from app.models.bridge import Agent
+from app.models.agents import Agent
 from app.models.execution import InvocationLease
 
 
@@ -27,7 +27,7 @@ def _app_with_allowed(engine: Engine, allowed: list[str]) -> FastAPI:
 
 def _set_repo(app: FastAPI, invocation_id: uuid.UUID, repo: str | None) -> None:
     with app.state.session_factory() as db:
-        from app.models.bridge import AgentInvocation
+        from app.models.agents import AgentInvocation
 
         invocation = db.get(AgentInvocation, invocation_id)
         assert invocation is not None

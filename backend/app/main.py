@@ -15,7 +15,7 @@ from sqlalchemy import Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
-from app.api import activity, agents, auth, bridge, devices, discussions, realtime, runtime, sessions, work, workspace
+from app.api import activity, agents, auth, discussions, realtime, runtime, sessions, work, workspace
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.ratelimit import RateLimiter
@@ -45,10 +45,10 @@ SECURITY_HEADERS = {
 def create_app(settings: Settings | None = None, engine: Engine | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
-    if not settings.bridge_token_secret:
-        # Development convenience: tokens stay valid for this process only. Set BRIDGE_TOKEN_SECRET in production.
-        settings.bridge_token_secret = secrets.token_urlsafe(48)
-        logger.warning("BRIDGE_TOKEN_SECRET not set; generated an ephemeral secret for this process")
+    if not settings.runtime_token_secret:
+        # Development convenience: tokens stay valid for this process only. Set RUNTIME_TOKEN_SECRET in production.
+        settings.runtime_token_secret = secrets.token_urlsafe(48)
+        logger.warning("RUNTIME_TOKEN_SECRET not set; generated an ephemeral secret for this process")
     db_engine = engine or make_engine(settings.database_url)
 
     execution_provider = build_execution_provider(settings)
@@ -59,7 +59,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         logger.info("app starting", extra={"environment": settings.environment})
         worker_stop = asyncio.Event()
         worker: asyncio.Task[None] | None = None
-        if execution_provider is not None and settings.execution_worker_enabled:
+        if settings.execution_worker_enabled:
             worker = asyncio.create_task(
                 run_outbox_worker(
                     app.state.session_factory,
@@ -97,11 +97,10 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         request.state.request_id = request_id
 
         # Double-submit CSRF: a state-changing API call must echo the ns_csrf cookie in a header.
-        # Bridge and runtime endpoints are exempt: they are non-browser clients that never send cookies.
-        # Runtime calls authenticate with a bearer run lease instead.
+        # Runtime calls are exempt: they are non-browser clients that never send cookies.
+        # They authenticate with a bearer run lease or runtime token instead.
         if (
             request.url.path.startswith("/api/")
-            and not request.url.path.startswith("/api/v1/bridge/")
             and not request.url.path.startswith("/api/v1/internal/executions/")
             and request.method in UNSAFE_METHODS
         ):
@@ -150,8 +149,6 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.include_router(work.router, prefix=api_prefix)
     app.include_router(activity.router, prefix=api_prefix)
     app.include_router(realtime.router, prefix=api_prefix)
-    app.include_router(devices.router, prefix=api_prefix)
-    app.include_router(bridge.router, prefix=api_prefix)
     app.include_router(agents.router, prefix=api_prefix)
     app.include_router(sessions.router, prefix=api_prefix)
     app.include_router(runtime.router, prefix=api_prefix)

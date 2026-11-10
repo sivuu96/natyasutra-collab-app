@@ -8,10 +8,8 @@ from app.services.execution import ExecutionProvider, FakeExecutionProvider
 from app.services.providers.cloud_run import CloudRunJobsProvider, load_dispatcher_credentials
 
 
-def build_execution_provider(settings: Settings) -> ExecutionProvider | None:
-    """Return the provider for the configured mode. None means bridge mode: no outbox worker."""
-    if settings.execution_provider == "bridge":
-        return None
+def build_execution_provider(settings: Settings) -> ExecutionProvider:
+    """Return the provider for the configured mode: the in-process fake (tests, local runs) or Cloud Run Jobs."""
     if settings.execution_provider == "fake":
         return FakeExecutionProvider()
     assert settings.gcp_dispatcher_key is not None and settings.gcp_project_id and settings.hub_base_url

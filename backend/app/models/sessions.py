@@ -29,8 +29,6 @@ class AgentSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(120), nullable=False)
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, default=SessionVisibility.PRIVATE.value)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default=SessionStatus.ACTIVE.value)
-    # The harness's own session/thread id. Turns resume it, so the agent keeps its context.
-    harness_session_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_activity_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

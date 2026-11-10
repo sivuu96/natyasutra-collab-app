@@ -10,7 +10,7 @@ from sqlalchemy import update
 from test_run_lease import _exchange, _start_run
 
 from app.db.base import utcnow
-from app.models.bridge import AgentInvocation
+from app.models.agents import AgentInvocation
 from app.models.enums import InvocationStatus
 from app.models.execution import ExecutionOutbox
 from app.services.execution import FakeExecutionProvider

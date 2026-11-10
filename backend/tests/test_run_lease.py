@@ -11,7 +11,7 @@ from helpers import API, create_project, csrf_headers, general_channel, register
 from sqlalchemy import select, update
 
 from app.db.base import utcnow
-from app.models.bridge import Agent, AgentInvocation, ProjectAgent
+from app.models.agents import Agent, AgentInvocation, ProjectAgent
 from app.models.enums import InvocationStatus
 from app.models.execution import ExecutionOutbox, InvocationLease
 from app.services.execution import FakeExecutionProvider, hash_token, process_once
@@ -30,11 +30,9 @@ def _start_run(app: FastAPI, client: TestClient, handle: str = "leaseclaude") ->
     with app.state.session_factory() as db:
         agent = Agent(
             owner_user_id=owner_id,
-            device_id=None,
             handle=handle,
             display_name="Lease test agent",
             harness="claude_code",
-            capabilities=[],
         )
         db.add(agent)
         db.flush()
@@ -195,7 +193,7 @@ def test_the_runtime_token_is_scoped_to_its_run(fake_app: FastAPI, fake_client: 
 
     claims = jwt.decode(
         body["runtime_token"],
-        fake_app.state.settings.bridge_token_secret,
+        fake_app.state.settings.runtime_token_secret,
         algorithms=["HS256"],
         audience=RUNTIME_AUDIENCE,
     )

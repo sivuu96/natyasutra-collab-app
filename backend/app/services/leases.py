@@ -18,7 +18,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.db.base import utcnow
-from app.models.bridge import Agent, AgentInvocation
+from app.models.agents import Agent, AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import InvocationLease
 from app.services.execution import hash_token
@@ -127,7 +127,7 @@ def exchange_lease(
         db.rollback()
         raise LeaseError(409, "lease_used")
 
-    if invocation.status == InvocationStatus.DELIVERED.value:
+    if invocation.status == InvocationStatus.QUEUED.value:
         invocation.status = InvocationStatus.ACCEPTED.value
     invocation.last_activity_at = now
 

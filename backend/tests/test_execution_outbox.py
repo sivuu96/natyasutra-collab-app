@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utcnow
-from app.models.bridge import Agent, AgentInvocation, BridgeDevice
+from app.models.agents import Agent, AgentInvocation
 from app.models.enums import InvocationStatus
 from app.models.execution import ExecutionOutbox
 from app.models.identity import Team, User
@@ -33,16 +33,11 @@ def _make_invocation(db: Session) -> uuid.UUID:
     project = Project(team_id=team.id, name="Project", slug=f"project-{suffix}")
     db.add(project)
     db.flush()
-    device = BridgeDevice(owner_user_id=user.id, name="Laptop", secret_hash="x" * 64)
-    db.add(device)
-    db.flush()
     agent = Agent(
         owner_user_id=user.id,
-        device_id=device.id,
         handle=f"agent{suffix}",
         display_name="Agent",
         harness="claude_code",
-        capabilities=[],
     )
     db.add(agent)
     db.flush()
@@ -78,7 +73,7 @@ def test_enqueue_is_idempotent_per_invocation(db: Session, invocation_id: uuid.U
     assert len(_outbox_rows(db)) == 1
 
 
-def test_successful_submit_marks_done_and_delivers_invocation(
+def test_successful_submit_marks_done_and_leaves_the_run_queued_for_the_runtime(
     db: Session, session_factory: sessionmaker[Session], invocation_id: uuid.UUID
 ) -> None:
     enqueue_dispatch(db, invocation_id)
@@ -95,8 +90,7 @@ def test_successful_submit_marks_done_and_delivers_invocation(
     assert len(provider.submitted) == 1
     assert provider.submitted[0][1] == f"dispatch:{invocation_id}"  # dedupe key sent as idempotency key
     invocation = db.get(AgentInvocation, invocation_id)
-    assert invocation.status == InvocationStatus.DELIVERED.value
-    assert invocation.delivered_at is not None
+    assert invocation.status == InvocationStatus.QUEUED.value  # the runtime's lease exchange moves it on
 
 
 def test_failed_submit_backs_off_and_retries_later(

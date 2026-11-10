@@ -108,8 +108,6 @@ class ChannelOut(ORMModel):
 class MessageIn(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
     parent_message_id: uuid.UUID | None = None
-    # Sender's explicit choice: keep a mention to an offline agent queued until its bridge returns.
-    queue_if_offline: bool = False
 
 
 class MessageEdit(BaseModel):

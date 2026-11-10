@@ -7,8 +7,6 @@ Each pass does two things:
    - timed_out: still open MAX_RUN after creation
 2. Asks the provider to stop the execution of any cancelled or failed run, exactly once. Cloud Run keeps
    the container alive until it is stopped, so this is what actually ends the work.
-
-Bridge runs are not touched here; the bridge reports its own failures.
 """
 
 import datetime as dt
@@ -19,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utcnow
-from app.models.bridge import Agent, AgentInvocation
+from app.models.agents import Agent, AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import ExecutionOutbox
 from app.services.execution import ExecutionProvider
@@ -33,10 +31,8 @@ STOP_LOOKBACK = dt.timedelta(hours=2)  # older finished runs are not worth anoth
 
 NONTERMINAL = (
     InvocationStatus.QUEUED.value,
-    InvocationStatus.DELIVERED.value,
     InvocationStatus.ACCEPTED.value,
     InvocationStatus.RUNNING.value,
-    InvocationStatus.AWAITING_APPROVAL.value,
 )
 MESSAGES = {
     "start_timeout": "The agent did not start in time.",
@@ -54,7 +50,7 @@ def stuck_reason(invocation: AgentInvocation, now: dt.datetime) -> str | None:
     if now - created > MAX_RUN:
         return "timed_out"
     last = _aware(invocation.last_activity_at or invocation.created_at)
-    if invocation.status in (InvocationStatus.RUNNING.value, InvocationStatus.AWAITING_APPROVAL.value):
+    if invocation.status == InvocationStatus.RUNNING.value:
         if now - last > ACTIVITY_TIMEOUT:
             return "heartbeat_lost"
     elif now - last > START_TIMEOUT:
@@ -72,8 +68,8 @@ def sweep_runs(
         candidates = db.scalars(select(AgentInvocation).where(AgentInvocation.status.in_(NONTERMINAL)).limit(200)).all()
         for invocation in candidates:
             agent = db.get(Agent, invocation.agent_id)
-            if agent is None or agent.device_id is not None:
-                continue  # bridge run
+            if agent is None:
+                continue
             reason = stuck_reason(invocation, now)
             if reason is None:
                 continue

@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from helpers import API, create_project, register
 from sqlalchemy import select
 
-from app.models.bridge import Agent
+from app.models.agents import Agent
 from app.models.identity import User
 from app.services.handles import allocate_user_handle, base_handle, handle_taken
 

@@ -19,7 +19,7 @@ from app.deps import get_current_user, get_db
 from app.models import Agent, AgentInvocation, AgentSession, AgentSessionMessage, ProjectAgent, User
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, ProjectRole, SessionStatus, SessionVisibility
 from app.realtime.hub import hub
-from app.services.agents import Outcome, apply_outcome, create_session_turn, dispatch_for_mode
+from app.services.agents import Outcome, apply_outcome, create_session_turn
 from app.services.audit import record_audit
 from app.services.authz import ROLE_RANK, load_project_for
 from app.services.events import record_event
@@ -37,7 +37,6 @@ class SessionIn(BaseModel):
 
 class TurnIn(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
-    queue_if_offline: bool = False
 
 
 class VisibilityIn(BaseModel):
@@ -268,15 +267,7 @@ def post_turn(
     )
     outcome = Outcome()
     try:
-        invocation_id = create_session_turn(
-            db,
-            session=session,
-            body=payload.body,
-            requester=user,
-            queue_if_offline=payload.queue_if_offline,
-            outcome=outcome,
-            execution_mode=request.app.state.execution_mode,
-        )
+        invocation_id = create_session_turn(db, session=session, body=payload.body, requester=user, outcome=outcome)
     except ValueError as error:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -290,12 +281,7 @@ def post_turn(
         request_id=_req_id(request),
     )
     db.commit()
-    for event_project, event in outcome.publish:
-        hub.publish(event_project, event)
-
-    dispatch = dispatch_for_mode(db, [invocation_id], request.app.state.execution_mode)
-    db.commit()
-    apply_outcome(dispatch)
+    apply_outcome(outcome)  # the run is queued in the same transaction; the worker starts it
     invocation = db.get(AgentInvocation, invocation_id)
     assert invocation is not None
     return TurnOut(invocation_id=invocation.id, status=invocation.status, error_code=invocation.error_code)

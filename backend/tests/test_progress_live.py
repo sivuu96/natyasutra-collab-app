@@ -15,7 +15,7 @@ def test_progress_from_the_runtime_is_delivered_to_the_socket(fake_app: FastAPI,
     body = _exchange(fake_client, run["token"], run["execution_name"]).json()
     invocation = body["invocation_id"]
     with fake_app.state.session_factory() as db:
-        from app.models.bridge import AgentInvocation
+        from app.models.agents import AgentInvocation
 
         project_id = str(db.get(AgentInvocation, uuid.UUID(invocation)).project_id)
     headers = {"origin": ORIGIN, "cookie": f"ns_session={fake_client.cookies['ns_session']}"}

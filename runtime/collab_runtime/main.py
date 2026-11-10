@@ -210,7 +210,7 @@ def _report_run(
             sequencer.send("progress", text="Writing the reply")
             if outcome.final_text:
                 sequencer.send("message", text=outcome.final_text)
-            sequencer.send("completed", harness_session_ref=outcome.session_id)
+            sequencer.send("completed")
             return 0
         sequencer.send("failed", code=outcome.error_code or "runtime_failed", message=outcome.error_message)
         return 1

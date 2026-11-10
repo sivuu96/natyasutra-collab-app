@@ -4,12 +4,14 @@ import os
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True
+    )
 
     environment: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
@@ -25,16 +27,16 @@ class Settings(BaseSettings):
     # Built frontend to serve from the API (single-origin deployment). None disables static serving.
     frontend_dist: str | None = None
 
-    # Bridge (local agent) settings. In development an unset secret is generated per process, so bridge
-    # tokens stop working on restart. Production refuses to start without BRIDGE_TOKEN_SECRET.
-    bridge_token_secret: str | None = None
-    bridge_token_minutes: int = 15
-    bridge_heartbeat_timeout_seconds: int = 60
-    pairing_code_minutes: int = 10
+    # Signs the short-lived tokens that let an agent run's runtime call the hub. In development an unset secret
+    # is generated per process, so tokens stop working on restart. Production refuses to start without it.
+    # RUNTIME_TOKEN_SECRET is the name to use; BRIDGE_TOKEN_SECRET is still read so existing deployments keep working.
+    runtime_token_secret: str | None = Field(
+        default=None, validation_alias=AliasChoices("RUNTIME_TOKEN_SECRET", "BRIDGE_TOKEN_SECRET")
+    )
 
-    # Where agent runs execute. "bridge" keeps the developer-machine bridge (default). "fake" runs the outbox
-    # with a deterministic in-process provider (tests and local runs). "cloud_run" starts ephemeral Cloud Run jobs.
-    execution_provider: Literal["bridge", "fake", "cloud_run"] = "bridge"
+    # Where agent runs execute. "fake" runs the outbox with a deterministic in-process provider (tests and local
+    # runs). "cloud_run" starts ephemeral Cloud Run jobs (production).
+    execution_provider: Literal["fake", "cloud_run"] = "fake"
     # Public base URL of the hub, given to runtime jobs for their callbacks. Render sets RENDER_EXTERNAL_URL.
     hub_base_url: str | None = None
     gcp_project_id: str | None = None
@@ -100,8 +102,8 @@ class Settings(BaseSettings):
             if not self.hub_base_url:
                 raise ValueError("HUB_BASE_URL (or RENDER_EXTERNAL_URL) is required when EXECUTION_PROVIDER=cloud_run")
         if self.environment == "production":
-            if not self.bridge_token_secret or len(self.bridge_token_secret) < 32:
-                raise ValueError("BRIDGE_TOKEN_SECRET must be set (at least 32 characters) in production")
+            if not self.runtime_token_secret or len(self.runtime_token_secret) < 32:
+                raise ValueError("RUNTIME_TOKEN_SECRET must be set (at least 32 characters) in production")
             if self.database_url.startswith("sqlite"):
                 raise ValueError("production must use PostgreSQL, not SQLite")
         return self

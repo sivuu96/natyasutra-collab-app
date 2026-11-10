@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from helpers import API, create_project, csrf_headers, register
 from test_run_lease import _exchange
 
-from app.models.bridge import Agent, AgentInvocation, ProjectAgent
+from app.models.agents import Agent, AgentInvocation, ProjectAgent
 from app.models.enums import InvocationStatus
 from app.models.sessions import AgentSessionMessage
 from app.services.execution import FakeExecutionProvider, process_once
@@ -20,11 +20,9 @@ def _session_with_agent(app: FastAPI, client: TestClient, handle: str) -> tuple[
     with app.state.session_factory() as db:
         agent = Agent(
             owner_user_id=owner_id,
-            device_id=None,
             handle=handle,
             display_name="Session test agent",
             harness="claude_code",
-            capabilities=[],
         )
         db.add(agent)
         db.flush()

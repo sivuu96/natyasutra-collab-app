@@ -1,7 +1,7 @@
 """Apply events that a runtime job reports about its run.
 
-Mirrors the bridge's frame handling so the UI behaves the same for cloud runs: output is live-only, a reply is
-persisted as a channel message or a session transcript entry, and completion or failure ends the run.
+Output is live-only, a reply is persisted as a channel message or a session transcript entry, and completion or
+failure ends the run.
 Each event is applied at most once, keyed by (invocation, sequence).
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.base import utcnow
-from app.models.bridge import Agent, AgentInvocation
+from app.models.agents import Agent, AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import RunEvent
 from app.models.sessions import AgentSession, AgentSessionMessage
@@ -27,7 +27,6 @@ class RunEventIn(BaseModel):
     text: str | None = Field(default=None, max_length=20_000)
     code: str | None = Field(default=None, max_length=60)
     message: str | None = Field(default=None, max_length=500)
-    harness_session_ref: str | None = Field(default=None, max_length=120)
 
 
 class RunEventError(Exception):
@@ -116,12 +115,6 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
         _mark_running(invocation)
         publish.extend(_persist_reply(db, invocation, agent, event.text or ""))
     elif event.type == "completed":
-        if event.harness_session_ref:
-            invocation.harness_session_ref = event.harness_session_ref
-            if invocation.session_id is not None:
-                session = db.get(AgentSession, invocation.session_id)
-                if session is not None:
-                    session.harness_session_ref = event.harness_session_ref
         invocation.status = InvocationStatus.COMPLETED.value
         invocation.completed_at = utcnow()
         publish.append(
@@ -161,12 +154,7 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
 
 
 def _mark_running(invocation: AgentInvocation) -> None:
-    if invocation.status in (
-        InvocationStatus.QUEUED.value,
-        InvocationStatus.DELIVERED.value,
-        InvocationStatus.ACCEPTED.value,
-        InvocationStatus.AWAITING_APPROVAL.value,
-    ):
+    if invocation.status in (InvocationStatus.QUEUED.value, InvocationStatus.ACCEPTED.value):
         invocation.status = InvocationStatus.RUNNING.value
 
 
