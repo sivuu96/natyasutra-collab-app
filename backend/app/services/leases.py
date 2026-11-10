@@ -22,6 +22,7 @@ from app.models.bridge import Agent, AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import InvocationLease
 from app.services.execution import hash_token
+from app.services.transcript import session_prompt
 
 RUNTIME_TOKEN_MINUTES = 15
 RUNTIME_AUDIENCE = "collab-runtime"
@@ -133,7 +134,7 @@ def exchange_lease(
     runtime_token, expires_in = issue_runtime_token(runtime_secret, invocation.id, now)
     context = RunContext(
         invocation_id=invocation.id,
-        prompt=invocation.prompt,
+        prompt=session_prompt(db, invocation),
         agent_handle=agent.handle,
         harness=agent.harness,
         runtime_token=runtime_token,

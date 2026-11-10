@@ -303,11 +303,15 @@ export function SessionsView() {
         <h2 className="text-sm font-semibold text-stone-700">About sessions</h2>
         <Card className="space-y-2 text-xs text-stone-600">
           <p>
-            Each message runs on the agent owner’s machine. The agent keeps its context between messages through its
-            harness’s own session.
+            A session is one conversation. Each message you send continues it, and the agent sees the earlier turns
+            when it replies.
           </p>
+          <p>Starting a new session starts a new conversation with no earlier turns.</p>
           <p>Private sessions are visible only to you. Sharing lets project members read and watch, but not write.</p>
-          <p>If the agent goes offline, the message is not delivered. It is not queued unless you choose that.</p>
+          <p>
+            An agent on a team member’s machine does not get a message while it is offline, unless you choose to queue
+            it. Cloud agents run when you send a message.
+          </p>
           {canWrite && <p>Mentions in channels are one-off requests; sessions are conversations.</p>}
         </Card>
         {requests.length > 0 && <p className="text-xs text-stone-400">{requests.length} recent requests</p>}
