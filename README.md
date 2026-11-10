@@ -1,67 +1,61 @@
 # NatyaSutra Collaboration Hub
 
-A workspace where a team plans and discusses the NatyaSutra port together: channels and threads, tasks, decisions with history, search, an activity trail, and live updates. Each teammate can also connect their own Claude Code or Codex to the hub through a local bridge, so an agent can answer in a channel or in a private session.
+A team workspace for the NatyaSutra port: projects, channels, tasks, decisions and live updates, with AI agents that answer in channels and sessions. Agents run in the cloud, so team members need nothing installed.
 
-## Using the hub
+## How it works
 
-- **Hosted:** once deployed (see [docs/deployment.md](docs/deployment.md)), your team opens the address in a browser. An administrator creates your account.
-- **Local:** follow the quick start below.
+- **Projects and channels.** A team has projects. Each project has channels, tasks, decisions, and an activity feed. Everything updates live for everyone in the project.
+- **Agents.** An agent is a Claude Code agent with a handle (for example `@claude`). Its owner attaches it to a project. It reads a read-only copy of its GitHub repository and replies in the channel or session where it was asked.
+- **Mentions.** Type `@` in a channel to see agents and people. Mentioning an agent starts a run. Progress shows above the message box while it works, and the reply appears in the channel.
+- **Sessions.** A session is a conversation with one agent. Each message continues it: the agent sees the earlier turns. Private sessions are visible only to their owner. Shared sessions can be read by the project, and only the owner can send.
+- **Stopping a run.** Anyone who asked, the agent's owner, or a project admin can stop a run. A run that stops responding is failed automatically after a few minutes.
+
+Start with the [architecture overview](docs/architecture.md), then the component guides:
+
+- [Backend](docs/components/backend.md): API, data model, services.
+- [Frontend](docs/components/frontend.md): pages, live updates, mentions and progress.
+- [Execution](docs/components/execution.md): the run queue, leases, Cloud Run, and the stuck-run sweeper.
+- [Runtime](docs/components/runtime.md): the container that runs an agent, its events, and its limits.
+
+Operating the hub:
+
+- [Development](docs/development.md): set up and test locally.
+- [Deployment](docs/deployment.md): Render, Supabase, and Google Cloud Run Jobs.
+- [Security](docs/security.md): trust boundaries, controls, and known limits.
 
 ## Status
 
-| Area | State |
-|---|---|
-| Discussions, tasks, decisions, search, activity, live updates, roles | Built and tested (backend suite on PostgreSQL, frontend suite, browser walkthrough) |
-| Local agent bridge (`bridge/`) | Working with Claude Code and Codex, verified end to end on one machine. Not yet tested across two machines. |
-| Dedicated agent sessions (private or shared) | Working, verified end to end with both harnesses |
-| Production deployment | Live at Render (web service) with the database on Supabase. Migrated from Render's database, verified by health checks and row counts. |
-| Conversation import, Git integration | Not started (Phases 4–5) |
+The hub is deployed for a small team. Working today: accounts, teams and projects, channels with live updates, tasks, decisions, activity and search, cloud agents that answer mentions and sessions, progress and stop, and `@` suggestions for agents and people.
 
-See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for detail and open items.
+Not yet built: notifications when someone is mentioned, agents that write to the repository, and agents on a member's own computer. [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) has the roadmap.
 
-## Free hosting limits (read before using the hosted hub)
-
-The web service runs on Render's **free plan**, and the database runs on Supabase's **free plan**. These limits apply:
-
-- **Web service (Render):** spins down after 15 minutes without traffic. Waking it takes about a minute. Bridges reconnect automatically. Free instance hours: 750 per workspace per month.
-- **Database (Supabase free):** projects **pause after a week of inactivity**. The data is kept, but the hub is down until someone restores the project in the Supabase dashboard. Storage is capped at 500 MB.
-- **No database backups** on the Supabase free plan. Export the data regularly with `pg_dump` (see [docs/deployment.md](docs/deployment.md)).
-
-To remove these limits, upgrade the plans in the Render and Supabase dashboards. See [docs/deployment.md](docs/deployment.md).
-
-## Quick start (Windows, PowerShell)
-
-Prerequisites: Docker Desktop, Python 3.11 (Windows build), Node.js LTS.
+## Quick start (local)
 
 ```powershell
-docker compose -f deploy/docker-compose.yml up -d postgres
+docker compose -f deploy/docker-compose.yml up -d postgres      # database
 cd backend
 py -3.11 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 copy .env.example .env
-.venv\Scripts\python.exe -m alembic upgrade head
-.venv\Scripts\python.exe -m scripts.seed          # prints a one-time password for alice@ and bob@example.com
+.venv\Scripts\python.exe -m alembic upgrade head                # schema
+.venv\Scripts\python.exe -m scripts.seed                        # optional sample users (prints a password once)
 .venv\Scripts\python.exe -m uvicorn app.main:create_app --factory --port 8000
 
-# in a second terminal
+# In a second terminal
 cd frontend
 npm install
-npm run dev                                        # open http://localhost:5173
+npm run dev                                                     # http://localhost:5173
 ```
 
-To run the production build locally instead, see "Run the production image" in [docs/deployment.md](docs/deployment.md).
+Local runs send agent runs to a fake, in-process provider, so nothing reaches Google Cloud. To run agents for real, see [deployment](docs/deployment.md). Tests, migrations and the local PostgreSQL setup are in [development](docs/development.md).
 
-Full instructions, tests, and troubleshooting: [docs/development.md](docs/development.md).
+## Repository layout
 
-## Documentation
-
-- [Deployment](docs/deployment.md) — deploying to Render, creating accounts, operating the hub
-- [Architecture](docs/architecture.md) — components, data flows, API surface
-- [Security and privacy](docs/security.md) — threat model, controls, known limitations
-- [Agent protocol](docs/agent-protocol.md) — the bridge wire contract
-- [Claude Code](docs/claude-code.md) and [Codex](docs/codex.md) — harness integration
-- [Development](docs/development.md) — setup, tests, migrations
-- [Implementation plan](IMPLEMENTATION_PLAN.md) — phases, decisions, open items
-
-The product specification is [NatyaSutra_Collaboration_Hub_Implementation_Greenfield.md](NatyaSutra_Collaboration_Hub_Implementation_Greenfield.md).
-This hub is a separate application. It does not connect to or modify the NatyaSutra product database.
+| Path | What it is |
+|---|---|
+| `backend/` | FastAPI application, migrations, operator scripts, tests |
+| `frontend/` | React app (Vite, TypeScript, Tailwind) |
+| `runtime/` | Container that runs one agent run: Claude Code, repository clone, events |
+| `deploy/` | Production Dockerfile and a Compose file for running the production image locally |
+| `render.yaml` | Render Blueprint for the web service |
+| `docs/` | Architecture, component guides, operations and security |

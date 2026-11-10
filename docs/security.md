@@ -1,171 +1,115 @@
-# Security and Privacy — NatyaSutra Collaboration Hub
+# Security and privacy
 
-Status: Phase 0 threat model and rules. These are release-blocking requirements (brief §6).
+This page covers what the hub protects, who can reach what, the controls in place, and what is still missing. It describes the system as it is deployed: a hosted hub, cloud agent runs, and a small team.
 
-## 1. Assets
+## 1. What is worth protecting
 
 | Asset | Why it matters |
 |---|---|
-| Developer provider credentials (Anthropic, OpenAI login state) | Must **never** reach the hub. Owned by the local harness. |
-| Private conversation transcripts | Private to owner by default. |
-| Project data (messages, tasks, decisions) | Visible only to project members with the right role. |
-| Device credentials for bridges | Can invoke agents on a developer's machine. Highest-impact secret in the system. |
-| Local repositories and worktrees | Can be read or modified by agents. |
+| Team conversations, tasks, decisions | The team's work. Some of it is private (sessions). |
+| Accounts and sessions | Access to projects. |
+| Anthropic API key | Spend, and access to the team's usage. Lives only in Secret Manager. |
+| GitHub App private key | Read access to the allowed repositories. Lives only in Secret Manager. |
+| Dispatcher service-account key | Can start and stop runs. Lives only in Render. |
+| Runtime lease and runtime token | Let one run call the hub. Each is for one invocation and expires. |
+| Repository contents | Read by agents during a run. Not stored after it. |
 
 ## 2. Trust boundaries
 
-1. Browser ↔ hub: untrusted client. All checks are server-side.
-2. Bridge ↔ hub: authenticated device, but the device runs on a developer laptop that can be lost. Its permissions are scoped by the hub and enforced locally.
-3. Hub ↔ harness: there is no direct link. The harness is only reachable through the local bridge.
-4. Hub ↔ GitHub: read/write via integration token held in deployment secrets only (Phase 5).
+```
+Browser ──(cookie + CSRF)──▶ Hub ──(bearer lease, then runtime token)──▶ Runtime (Cloud Run)
+                              │                                           │
+                              │ dispatcher key                            │ runtime SA
+                              ▼                                           ▼
+                        Cloud Run API                          Secret Manager, GitHub, Anthropic
+```
+
+- **Browser to hub.** Session cookie, CSRF check on writes, project membership on every project route.
+- **Hub to Cloud Run.** The dispatcher account starts and stops executions. It cannot read secrets.
+- **Runtime to hub.** The runtime has no account. It holds one lease, exchanges it once, and then uses a 15-minute token for its own invocation.
+- **Runtime to secrets and GitHub.** The job's account can read two named secrets. The GitHub token it creates covers one repository and is read-only.
 
 ## 3. Threats and controls
 
 | Threat | Control |
 |---|---|
-| Non-member reads a project | `authz` module on every route and WS subscription; isolation tests for every project-scoped endpoint. |
-| IDOR (guessing IDs) | UUID IDs plus membership check; cross-project queries forbidden in tests. |
-| Stolen session token | Only a hash stored server-side; idle and absolute expiry; logout revokes; rotation on login. |
-| Password cracking | argon2-cffi with library defaults; no custom crypto. |
-| Brute force on login / pairing | Rate limits per IP and per account on auth, pairing and invocation endpoints. |
-| Stolen bridge device credential | Access token lifetime ≤ 15 min; device secret stored hashed; per-device revoke takes effect immediately on next heartbeat or WS message. |
-| Pairing code reuse | Single use, ≤ 10 min expiry, bound to the requesting user. |
-| Cloud pushes arbitrary shell commands to a laptop | The protocol has **no** shell-execution message. Only typed operations (`start_session`, `send_message`, `cancel`, `close_session`) exist. Anything else is rejected. |
-| Path traversal on bridge | Every working directory is resolved with `realpath` and must lie under an explicitly configured repository root. Symlink escapes rejected. |
-| Destructive actions (delete files, force-push, merge, deploy, credential change, commands outside approved roots) | Require an approval event. Approval is shown in web UI and CLI. Default is deny on timeout. |
-| Secret leakage in transcripts | Local secret scan before upload (API keys, tokens, passwords, private keys). Hits are redacted or the upload is blocked, and the owner sees a report first. |
-| Secret leakage in logs | Logs never include message bodies, transcript contents, env vars or credentials. A logging filter redacts `Authorization` headers and token-shaped strings. |
-| Replay / duplicate events | Idempotency keys on every event; `(stream_id, sequence)` uniqueness. |
-| XSS via message content | Messages rendered as text, or sanitised Markdown with no raw HTML. |
-| CSRF | Session cookies `SameSite=Lax`, `HttpOnly`, `Secure` in production; state-changing endpoints require a CSRF token or a custom header check. |
-| CORS misconfiguration | Allow-list of frontend origins from env; no wildcard with credentials. |
-| Malicious upload | Size and MIME/extension allow-list; files stored outside web root; served with `Content-Disposition: attachment`. |
-| Supply chain | Pinned dependency versions in lockfiles; dependency audit in CI (Phase 6). |
+| Stolen session cookie | HttpOnly cookies, secure cookies in production, idle timeout (24 hours by default), absolute timeout (14 days). Tokens are stored as hashes. |
+| Cross-site request forgery | Double-submit token: the `ns_csrf` cookie must match the `X-CSRF-Token` header on every write. Runtime endpoints use bearer credentials instead. |
+| Password guessing | Login is limited to 30 attempts per IP and 10 per email in 15 minutes. Registration is limited per IP. Passwords are hashed with argon2. Sign-up is closed by default. |
+| A user reads another team's project | Every project route checks membership and returns 404 for non-members. Agent identity never grants access. |
+| A user reads a private session | Private sessions return 404 to anyone but the owner, in the REST API and in live events. |
+| A replayed or reused run lease | One use, 10-minute lifetime, stored as a hash, revoked when a newer attempt starts, bound to the execution. |
+| A run impersonating another run | Runtime tokens name one invocation and are verified on every event. |
+| A run starting for the wrong repository | The hub checks the repository against `GITHUB_ALLOWED_REPOS` and refuses before the lease is used. |
+| A run writing to the repository | The GitHub token has read-only contents access. The agent's tools are limited to `Read`, `Glob` and `Grep`. |
+| A run escaping its workspace | The clone is in a temporary directory, deleted at the end. The run user is not root, and the image has no credentials. |
+| Secrets leaking into logs or chat | Secrets come from Secret Manager at run time. The runtime redacts the key and `sk-ant-…` patterns from output. Logs never include message bodies or credentials. |
+| A runaway agent | Runtime timeout of 25 minutes; the sweeper fails a run after 40 minutes at most, and fails silent runs after 5 minutes. A person can stop a run. |
+| A replayed or duplicated event | Each event has a sequence number, stored once. A finished run refuses further events. |
+| Injection through repository content | The agent's tools are read-only. The agent cannot run commands. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
+| Stolen dispatcher key | It can start and stop runs, which costs money. Rotate it (see [deployment](deployment.md#5-operating-the-hub)) and keep it only in Render. |
+| Security headers | Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy, and HSTS in production. |
 
 ## 4. Authentication
 
-- Email + password, argon2-cffi hashing, minimum length 12.
-- Server-side sessions: random 256-bit token; only SHA-256 of the token is stored.
-- Login and password-change paths rate-limited.
-- No provider credentials, OAuth tokens to model providers, or cookies from Claude/Codex are ever requested or stored.
+- Registration and login create a server-side session. The browser holds an opaque token in a cookie; the hub stores its hash.
+- Sessions end after 24 hours without use or 14 days in total, whichever is first.
+- Logging out ends the session. Setting a password from the operator shell ends every session for that account.
+- Passwords use argon2 through the `argon2-cffi` library. No custom cryptography.
 
-## 5. Authorisation model
+## 5. Authorisation
 
-Roles per project: `owner`, `admin`, `member`, `viewer`.
+| Role | Can |
+|---|---|
+| Owner | Everything in the project, including role changes and deleting members. |
+| Admin | Add, change and remove members, except owners (only an owner can make or remove an owner). Attach any agent, cancel any run, close any session. |
+| Member | Post, create tasks and decisions, attach their own agents, start sessions, cancel their own runs. |
+| Viewer | Read the project. |
 
-| Action | owner | admin | member | viewer |
-|---|---|---|---|---|
-| Read channels/messages | ✔ | ✔ | ✔ | ✔ |
-| Post messages | ✔ | ✔ | ✔ | ✘ |
-| Create/update tasks, decisions | ✔ | ✔ | ✔ | ✘ |
-| Manage membership | ✔ | ✔ | ✘ | ✘ |
-| Register own agent to project | ✔ | ✔ | ✔ | ✘ |
-| Invoke an agent | ✔ | ✔ | ✔ | ✘ |
-| Approve destructive operations | ✔ | ✔ | owner of the agent only | ✘ |
-| Delete project | ✔ | ✘ | ✘ | ✘ |
-
-Non-members receive `404`, not `403`, to avoid revealing project existence.
+Agent owners can cancel runs on their agents. Session owners are the only people who can send turns in their session.
 
 ## 6. Conversation privacy
 
-- Imported conversations default to `visibility = private` with `owner_user_id` set.
-- Sharing to a project is an explicit `share` action creating an `audit_events` row.
-- Shared transcript access is audited on read.
-- Owner can unshare, delete raw and normalised copies, and set retention.
-- Disclosure text in the UI states exactly what is synced and who can see it.
+- **Channels** are visible to every project member.
+- **Private sessions** are visible only to their owner. Other members get 404, not 403, so the session's existence is hidden. Their events are not sent to other members, live or on replay.
+- **Shared sessions** can be read by every project member, and they show a notice to say so. Only the owner can send turns or change visibility.
+- **Audit records** never contain message bodies.
+- **Runs** send their events to the hub only. Output text is live-only: it is streamed to the people viewing the session and is not stored, except as the final reply.
+
+The agent's reply is stored in the channel or the session transcript, like any message. Anyone who can read the channel or the shared session can read the reply.
 
 ## 7. Agent safety rules
 
-1. Bridge uses outbound TLS only. No listening port is opened.
-2. Credentials for harnesses are never read by the bridge; the harness process authenticates itself.
-3. Each agent is bound to an allow-list of repository roots and worktree directories on that machine.
-4. Sensitive operations need an approval record in the database and a matching local confirmation. Timeouts deny.
-5. Every invocation, approval, cancellation, tool outcome and failure produces an audit event.
-6. Device revocation is immediate: the hub closes the socket and rejects further events from that device.
+- An agent runs only when someone asks for it in a project where it is attached. Attaching is the owner's consent for that project.
+- Cloud agents read a copy of one repository and write nothing. They cannot run shell commands, open pull requests or reach the network other than the Anthropic API.
+- Repositories must be on the allow-list. Adding one is an operator action, and the GitHub App must be installed on it.
+- Agents see only the prompt and the earlier turns of their session. They have no access to other sessions, other channels, or the rest of the hub.
+- Each run is one container. Nothing carries over between runs except the transcript that the hub sends.
 
 ## 8. Audit
 
-`audit_events` is append-only (no UPDATE/DELETE granted to the application role in production). Each row records actor (user or agent), project, action, target, outcome, timestamp, request ID. Audit rows never contain message bodies.
+The audit log records: account and membership changes, project and channel creation, agent attach, run requests and cancels, session creation, visibility changes, closing, and denied actions. Each entry records who, what, when, the target, and the request id. It does not record message bodies or credentials.
 
-## 9. Open security items
+## 9. Operator access
 
-- S1: Choose the production password-reset channel (email provider not decided). Phase 1 ships without self-service reset; admin reset only.
-- S2: Decide on SSO/OIDC before any external team uses the hub.
-- S3: Penetration test before Phase 6 sign-off.
+Operators reach the hub through the Render shell and the Supabase dashboard. Both are protected by their own accounts. Operators should use a strong, unique password and two-factor authentication on Render, Supabase, Google Cloud and GitHub.
 
-## 10. Implemented in Phase 1 and known limitations
+The Supabase Data API must stay closed (see [deployment](deployment.md#database-supabase)). The hub's own database user is the only one that should read the tables.
 
-Verified by the test suite (66 on SQLite, 68 on PostgreSQL 16) and by the end-to-end smoke test.
+## 10. Known limitations
 
-| Control | Implementation | Tests |
-|---|---|---|
-| Password hashing | argon2-cffi default parameters; minimum 12 characters; timing-equalised verify for unknown accounts | `test_auth.py` |
-| Session tokens | 256-bit random token in an HttpOnly, SameSite=Lax cookie (`Secure` in production). Only SHA-256 stored. | `test_session_token_stored_only_as_hash` |
-| Session lifetime | Idle timeout (default 24 h, extended on use) and absolute timeout (default 14 days, not extendable) | idle and absolute expiry tests |
-| Logout | Server-side revocation; replaying the old cookie fails | `test_logout_revokes_server_side_session` |
-| Account deactivation | Deactivated users are rejected on existing sessions (no automatic lockout yet; rate limits cover brute force) | `test_deactivated_user_cannot_use_existing_session` |
-| CSRF | Double-submit: `ns_csrf` cookie must equal `X-CSRF-Token` on every POST/PATCH/PUT/DELETE under `/api/` | CSRF tests |
-| Rate limits | Login: 30 per IP and 10 per email per 15 min. Register: 5 per IP per hour. Returns 429 with `Retry-After`. | `test_login_rate_limited_per_email` |
-| Enumeration resistance | Login failures use one generic message; duplicate registration returns a generic 400; non-members get 404 | `test_login_wrong_password_is_generic_401`, isolation suite |
-| Project isolation | Single authorisation function; every project route calls it; non-members get 404 on all reads and writes | `test_authz_isolation.py` (enumerates endpoints) |
-| Role rules | Owners only grant, change or remove owners; admins cannot grant above their own role; last owner protected | role tests |
-| Message integrity | Authors edit only their own messages; deletion is soft and cleared from every response | discussion tests |
-| Decision integrity | Proposed by default; only the decision owner or an admin can accept or reject; no automatic acceptance | decision tests |
-| Realtime authorisation | Origin allow-list; cookie authentication; membership checked at connect and every 30 s | `test_realtime.py`, isolation suite |
-| Audit | Append-only rows for security and mutation events; admin-only read; bodies are never recorded | `test_audit_never_contains_message_bodies` |
-| Search scope | Every query carries the project filter; LIKE wildcards escaped | search tests |
-| Log hygiene | JSON logs redact `Bearer …` and `password=`/`token=`/`secret=` patterns | not yet covered by a test |
+These are known and accepted for a small trusted team. Each must be addressed before the hub is used by people outside the team or at larger scale.
 
-### Bridge and agent controls (Phase 2)
+- **One instance.** The rate limiter, realtime fan-out and execution worker are in-process. Scaling out needs a shared rate-limit store, a message bus for realtime events, and a single leader for the worker.
+- **Provider starts are not idempotent.** `jobs:run` has no idempotency key. The lease makes a duplicate execution harmless, but it is still started. See [execution](components/execution.md#cloud-run-provider).
+- **Long-lived dispatcher key.** The hub holds a service-account key. Workload identity would remove the key; this needs a platform change.
+- **No outbound network controls on runs.** The job can reach any host, so the agent could in principle send data to a site it finds. Restrict the job's network with egress controls before running untrusted repositories.
+- **Prompt injection.** The agent reads repository text and replies to people. A document can try to change the agent's behaviour or its answer. Read-only tools limit the damage, but the agent's replies should be treated as suggestions, not verified facts.
+- **No review of agent replies.** Replies are not checked before they are shown. Anyone reading a reply should check claims that matter.
+- **Free-plan hosting.** Render and Supabase free plans sleep or pause and have no automatic backups. See [deployment](deployment.md#known-limits).
+- **Session memory is capped.** Old turns are dropped from long sessions. This is a functional limit, not a security control.
+- **Passwords and recovery.** There is no self-service password reset. An operator resets it from the shell.
 
-Verified by `test_bridge_flow.py` and `test_bridge_contract.py` (backend), and `test_policy_and_config.py`, `test_runner.py`, `test_claude_adapter.py` (bridge).
+## 11. Reporting a problem
 
-| Control | Implementation |
-|---|---|
-| Hub cannot reach into a machine | Bridge connects outbound only; no listening port. |
-| Hub cannot run commands | No frame type carries a command or path. The protocol is validated by an allow-list of types and strict payload schemas. |
-| Device secret | Random 256-bit, shown once, stored hashed on the hub. On the bridge: OS credential store, else a file in the state directory. Never in config. |
-| Pairing code | One-time, 10-minute expiry, hashed, rate-limited per IP. |
-| Bridge authentication | Bearer JWT (HS256, 15 minutes, audience and issuer checked). Cookies are refused on the bridge socket, so a logged-in browser cannot be used as a bridge. |
-| Revocation | Immediate: socket closed with 4003, token exchange refused, agents revoked, active work failed. |
-| Working directory | Must resolve inside an approved root. Symlinks and junctions are resolved before the containment check. Checked on every run. |
-| Tool use | Only `Read`, `Glob`, `Grep` run without approval. Anything else pauses for a human decision in the hub. Approval: owner or project admin only; the requester cannot approve their own request. |
-| Cross-device isolation | A device can act only on invocations of agents it owns. |
-| Agent identity | Handles are global and first-come. Another user's handle is refused and the bridge is told. |
-| Attachment consent | An agent can only be invoked in projects where its owner attached it. Only the owner (or an admin) can attach or detach. |
-| Audit | Lifecycle transitions, approvals, attachments, and device events are audited. Streamed deltas and message bodies are not. |
-| Logs | The bridge logs IDs and states. Harness stderr is scrubbed for key-shaped text before it leaves the machine. |
-| Message-to-agent prompt | Uses the message body as the prompt. Anyone who can post in a project can ask an attached agent to act within its approved folder. That is the intended trust model: attaching an agent is the owner's consent for the project. |
-
-### Dedicated session controls (Phase 3)
-
-Verified by `test_sessions.py` (15 tests, including a live WebSocket check) and by an end-to-end run with real Claude Code and Codex.
-
-| Control | Implementation |
-|---|---|
-| Private by default | New sessions are private. Other members get 404 on the session, transcript, turns, and invocations. |
-| Live output | Each event carries `visibility` and `owner_user_id`. The socket delivers private events only to the owner, on replay and live, including streamed deltas. |
-| Feeds | The activity feed hides private session events from non-owners. |
-| Approvals | A private session's approval is visible and decidable only by the session owner and the agent's owner. |
-| Sharing | Only the owner can share or unshare. Sharing gives read access and live output, not the right to send turns. |
-| Closing | The owner or a project admin can close a session. Closed sessions refuse turns. |
-| Persisted events | Session events contain identifiers and visibility, never message or delta text. |
-
-Known gap: a session's events were stored with the visibility in effect at the time. Making a session private after it was shared does not retract events already delivered to members.
-
-### Bridge limitations
-
-1. A hub-side revocation closes the socket, but a bridge that has already started a harness process stops it only when its runner receives the cancel or when the process exits. Revocation does not kill a running harness on the machine. The bridge should be stopped locally as well.
-2. The approval timeout (30 minutes) and the queue limit (500 frames per connection) are fixed values in code, not configuration.
-3. The bridge has no per-tool allow-list beyond read-only; a human approves by tool name, not by exact command. Approving `Bash` approves all shell commands for that request.
-4. Prompt and reply content pass through the hub database in plain text, as chat messages do. Only the bridge's logs are kept free of content.
-
-### Known limitations (must be addressed before any external use)
-
-1. **In-process rate limiter and realtime hub.** Both work only with a single API process. Multiple instances need a shared store (for example PostgreSQL or Redis) for limits and a shared bus (PostgreSQL LISTEN/NOTIFY or Redis pub/sub) for events. Until then, deploy one replica.
-2. **No password reset, no email verification, no MFA.** Registration is open by default; set `ALLOW_REGISTRATION=false` to close it.
-3. **Proxy headers.** Rate limits key on the TCP peer address. Behind a reverse proxy, run uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy>` so limits apply to real clients. Not yet configured in deployment files.
-4. **No CSP or security headers yet.** Planned for Phase 6 with the production deployment config.
-5. **Cookies on `localhost` only tested over HTTP.** `Secure` is enforced only when `ENVIRONMENT=production`; HTTPS deployment is not yet verified.
-6. **Mentions do not notify.** The mention list is recorded in the persisted event payload. Notification delivery is not built.
-7. **Log redaction is a best-effort regex.** Structured logging avoids logging bodies, but the redaction filter needs its own test before Phase 6 sign-off.
+Report security problems to the project owner directly, not in a channel. Do not paste secrets, tokens or private conversations into an issue or a message. If a secret may have leaked, rotate it first (see [deployment](deployment.md#5-operating-the-hub)), then report.

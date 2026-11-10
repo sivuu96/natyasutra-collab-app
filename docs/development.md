@@ -1,6 +1,8 @@
 # Development
 
-Quick start (after the one-time setup below):
+This guide covers running the hub locally, the test suites, and the checks to run before you push. Commands are for Windows PowerShell; on other systems use `.venv/bin/python` in place of `.venv\Scripts\python.exe`.
+
+## Quick start
 
 ```powershell
 docker compose -f deploy/docker-compose.yml up -d postgres      # 1. database
@@ -11,28 +13,37 @@ cd backend
 cd ..\frontend; npm run dev                                     # 5. UI at http://localhost:5173
 ```
 
+Local runs use `EXECUTION_PROVIDER=fake`, which records agent runs without starting anything. Nothing reaches Google Cloud.
+
+## Repositories and what runs where
+
+| Part | Folder | Tests |
+|---|---|---|
+| Hub API, worker, migrations | `backend/` | `pytest` in `backend/` |
+| Web app | `frontend/` | `npm test` in `frontend/` |
+| Agent runtime | `runtime/` | `pytest` in `runtime/` |
+| Production image and Compose | `deploy/` | `docker compose ... up --build` |
+
 ## Backend (Python 3.11)
 
-Use the **Windows** Python 3.11 installation. The MSYS2 Python on this machine has a MinGW build
-tag that cannot install `pydantic-core` or `psycopg[binary]` wheels.
+Use the **Windows** Python 3.11 installation. The MSYS2 Python has a MinGW build tag that cannot install the `pydantic-core` or `psycopg[binary]` wheels.
 
 ```powershell
 cd backend
 py -3.11 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # runtime + test/lint tools
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # runtime + test and lint tools
 copy .env.example .env          # then edit DATABASE_URL if needed
 ```
 
-`requirements.txt` includes `uvicorn[standard]`. Plain `uvicorn` has no WebSocket implementation,
-so every `/api/v1/ws/...` connection returns 404. This was found and fixed during Phase 1.
+`requirements.txt` includes `uvicorn[standard]`. Plain `uvicorn` has no WebSocket support, so every `/api/v1/ws/...` connection would return 404.
 
 ### Tests
 
 ```powershell
-.venv\Scripts\python.exe -m pytest -q                 # SQLite in-memory: 66 passed, 2 skipped
+.venv\Scripts\python.exe -m pytest -q
 ```
 
-Run the whole suite on PostgreSQL (68 passed on PostgreSQL 16):
+The default database is SQLite in memory, and each test gets a fresh one. To run the suite on PostgreSQL as well:
 
 ```powershell
 docker exec deploy-postgres-1 psql -U collab -d collab -c "CREATE DATABASE collab_test;"
@@ -58,12 +69,26 @@ Lint and format:
 .venv\Scripts\python.exe -m alembic revision --autogenerate -m "describe change"
 ```
 
-| Revision | Contents | Verified on |
-|---|---|---|
-| `b38873a6b2ce` | Users, teams, memberships, projects, channels, messages, tasks, decisions, revisions, audit | SQLite, PostgreSQL 16 |
-| `eed762fe4dbf` | Auth sessions, project events, `projects.event_seq` | PostgreSQL 16 |
+`alembic check` should print `No new upgrade operations detected`. If it does not, the models and the migrations disagree; fix the migration before you commit.
 
-Each was checked with upgrade, `alembic check` (no drift), downgrade, upgrade.
+Migrations are PostgreSQL-first. Constraint names must be wrapped in `op.f(...)`, because the naming convention in `app/db/base.py` would otherwise add the prefix again.
+
+| Revision | Contents |
+|---|---|
+| `b38873a6b2ce` | Users, teams, memberships, projects, channels, messages, tasks, decisions, revisions, audit |
+| `eed762fe4dbf` | Auth sessions, project events, `projects.event_seq` |
+| `ca45a4ac516f` | Early agent tables (later reduced by `f2a3b4c5d6e7`) |
+| `c2bea0dd1f66` | Dedicated sessions |
+| `5e0d1f2a3b4c` | Execution outbox |
+| `7a1c2d3e4f50` | Agents without a device |
+| `9b2c3d4e5f60` | Invocation leases |
+| `b4d5e6f7a8b9` | Run events |
+| `c5e6f7a8b9c0` | Agent repository and branch |
+| `d6f7a8b9c0d1` | Run activity and cancel |
+| `e7a8b9c0d1e2` | User handles |
+| `f2a3b4c5d6e7` | Removes the local bridge: devices, pairing, approvals, inbound events, Codex, and bridge-only columns. Refuses to run while a device-backed agent exists. Cannot be reversed. |
+
+The last migration was checked on PostgreSQL 16: it refused with a device-backed agent present, ran after that agent was removed, and `alembic check` reported no drift.
 
 ### Seed data
 
@@ -71,9 +96,7 @@ Each was checked with upgrade, `alembic check` (no drift), downgrade, upgrade.
 .venv\Scripts\python.exe -m scripts.seed
 ```
 
-Creates `alice@example.com` (owner) and `bob@example.com` (member) in a team, a project, five channels,
-a task and a proposed decision. A random password is generated per run and printed once. The script is
-idempotent. Note that the seeded password appears only in that terminal's output and is not stored.
+Creates `alice@example.com` (owner) and `bob@example.com` (member) in a team, a project, channels, a task and a proposed decision. A random password is generated per run and printed once. The script is idempotent.
 
 ### Run the API
 
@@ -81,22 +104,42 @@ idempotent. Note that the seeded password appears only in that terminal's output
 .venv\Scripts\python.exe -m uvicorn app.main:create_app --factory --port 8000
 ```
 
-- `GET /health` — liveness, no database access.
-- `GET /ready` — database reachable.
-- API: `/api/v1/...` (see the route list in `docs/architecture.md`).
+- `GET /health`: liveness, no database access.
+- `GET /ready`: database reachable.
+- API: `/api/v1/...`. See [Backend](components/backend.md#api).
 
-## Frontend (Node 26 LTS, npm 11)
+### Agents locally
+
+With `EXECUTION_PROVIDER=fake`, a mention or session turn is queued, and the worker records a submission. No runtime starts, so no reply appears. To test the runtime end to end, run the real container (below) against a real Google Cloud job, or test the runtime in isolation (the runtime tests use a fake hub and a fake Claude Code binary).
+
+## Runtime (Python 3.11)
+
+```powershell
+cd runtime
+..\backend\.venv\Scripts\python.exe -m pip install -r requirements.txt   # once: httpx, pyjwt, cryptography, Secret Manager client
+..\backend\.venv\Scripts\python.exe -m pytest -q
+```
+
+The tests use a fake hub and a fake harness script, so they need no network and no Anthropic key.
+
+To build the image locally, from the repository root:
+
+```powershell
+docker build -f runtime/Dockerfile -t collab-agent-runtime:local .
+```
+
+## Frontend (Node 22 LTS or newer)
 
 ```powershell
 cd frontend
 npm install
 npm run dev          # Vite on http://localhost:5173, proxies /api (including WebSockets) to :8000
-npm run typecheck
-npm test             # Vitest, 18 tests
+npm test             # Vitest
+npx tsc --noEmit -p . # type check
 npm run build        # type check + production bundle in dist/
 ```
 
-Set `VITE_API_TARGET` to point the proxy at another API address if needed.
+Set `VITE_API_TARGET` to point the proxy at another API address.
 
 ## End-to-end smoke test
 
@@ -107,8 +150,7 @@ cd backend
 .venv\Scripts\python.exe -m scripts.smoke_e2e --base http://localhost:5173
 ```
 
-It registers two throwaway users, creates a project, adds the member, sends a message and a task, and
-checks that the owner's WebSocket receives both live. It then logs out and checks the session is revoked.
+It registers two throwaway users, creates a project, adds the member, sends a message and a task, and checks that the owner's WebSocket receives both live. It then logs out and checks the session is revoked.
 
 ## Local PostgreSQL
 
@@ -116,58 +158,18 @@ checks that the owner's WebSocket receives both live. It then logs out and check
 docker compose -f deploy/docker-compose.yml up -d postgres
 ```
 
-Requires Docker Desktop to be running. Container `deploy-postgres-1`, healthy on `localhost:5432`.
-The credentials in `deploy/docker-compose.yml` are local-only defaults and must not be used anywhere else.
+Requires Docker Desktop. The container `deploy-postgres-1` listens on `localhost:5432`. The credentials in `deploy/docker-compose.yml` are local defaults and must not be used anywhere else.
 
-## Local bridge (Phase 2)
+## Before you push
 
-```powershell
-cd bridge
-py -3.11 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.venv\Scripts\python.exe -m pytest -q            # 40 tests
-.venv\Scripts\python.exe -m ruff check collab_bridge tests
-```
-
-The bridge's own usage guide is `bridge/README.md`. Set `BRIDGE_TOKEN_SECRET` for the API in any shared environment. If it is unset, the API generates an ephemeral secret and logs a warning, so bridge tokens stop working on restart.
-
-Apply migration `ca45a4ac516f` (bridge tables, `messages.author_agent_id`) before using the bridge:
-
-```powershell
-.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-Rate limits are in memory. Registering more than five accounts from one address within an hour returns 429 until the API restarts. This applies to local testing as well.
-
-Test-database caution: the PostgreSQL integration tests drop every table in `TEST_DATABASE_URL`, including `alembic_version`. After running them, rebuild the database from migrations (drop the `public` schema, then `alembic upgrade head`) before testing migrations again. Use a database that holds nothing you need.
-
-### End-to-end check with the real Claude Code CLI
-
-This needs a logged-in Claude Code install and the API and bridge running. It makes a few short model calls. A scratch driver used during Phase 2 walked through these steps:
-
-1. Register two users and create a project, then create a pairing code.
-2. `collab-bridge pair`, then `collab-bridge agent add --harness-bin <path to claude.exe>`, then `collab-bridge run`.
-3. Attach the agent to the project and mention it. Expect the reply `BRIDGE OK`, attributed to the agent.
-4. Ask it to write a file. Expect an approval request, approve it as the agent owner, and expect the file to appear in the approved folder.
-
-Agent handles are global and first-come. Use a fresh handle for each run.
-
-## Dedicated sessions and Codex (Phase 3)
-
-Apply migration `c2bea0dd1f66` (agent sessions, session messages, nullable invocation channel) before using sessions:
-
-```powershell
-.venv\Scripts\python.exe -m alembic upgrade head
-```
-
-Codex needs the CLI installed and logged in on the bridge machine. On Windows, use the native binary under the npm package (`codex.exe`, see `docs/codex.md`); the `.cmd` shim needs Node on PATH.
-
-The end-to-end check used a scratch driver (not in the repo) that: opens a private session with each agent, sends two turns (remember a word, then recall it), checks that a second member cannot open the private session (404), and shares the Codex session to confirm the member can read it. Both agents passed.
+1. `backend`: `pytest`, `ruff check`, and `alembic check` if you changed models.
+2. `runtime`: `pytest`.
+3. `frontend`: `npm test` and `npx tsc --noEmit -p .`.
+4. Check that no secret, key or `.env` file is staged: `git status` and `git diff --cached`.
 
 ## Known local-development gotchas
 
-- The rate limiter and realtime hub are in-process. Run **one** API process. Running several behind a load
-  balancer needs a shared store and bus first (see `docs/security.md` §10).
+- The rate limiter and realtime hub are in-process. Run **one** API process.
 - The API sets `Secure` on cookies only when `ENVIRONMENT=production`. Local runs use plain HTTP.
-- The first request to the API sets the `ns_csrf` cookie. Any state-changing call without that cookie and a
-  matching `X-CSRF-Token` header returns 403.
+- The first request to the API sets the `ns_csrf` cookie. A state-changing request without that cookie and a matching `X-CSRF-Token` header returns 403.
+- `deploy/.env` (used by Compose) must define `RUNTIME_TOKEN_SECRET`. Older files that define only `BRIDGE_TOKEN_SECRET` must be renamed.

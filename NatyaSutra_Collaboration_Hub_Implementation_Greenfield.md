@@ -1,5 +1,10 @@
 # NatyaSutra Collaboration Hub --- Implementation Brief for Claude Code
 
+> **Historical document.** This is the original brief. It describes the first design, which ran agents on each
+> member's own machine through a local bridge. That bridge has been removed. Agents now run in the cloud. For the
+> current design, read [README.md](README.md), [docs/architecture.md](docs/architecture.md) and the component guides
+> in [docs/components/](docs/components/). Its status and open items are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+
 > **Purpose:** Build a self-hostable, cloud-hosted collaboration
 > workspace that lets multiple developers work on the NatyaSutra port
 > together while each person uses their own locally authenticated Claude

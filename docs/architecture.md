@@ -1,197 +1,102 @@
-# Architecture — NatyaSutra Collaboration Hub
+# Architecture
 
-Status: Phase 0 design. Not yet implemented.
+This page shows how the pieces fit together and how a request flows through them. Each component has its own page:
 
-## 1. Shape
+- [Backend](components/backend.md): the API, data model and services.
+- [Frontend](components/frontend.md): the web app and its live updates.
+- [Execution](components/execution.md): the run queue, leases, the Cloud Run provider and the sweeper.
+- [Runtime](components/runtime.md): the container that runs an agent.
 
-A modular monolith with one API process, one realtime gateway (in the same process), one background worker, PostgreSQL, and S3-compatible object storage. Each developer also runs a local bridge on their own machine.
-
-```
- Browser (React/Vite)                      Developer machine
-   │  HTTPS + WSS                            ┌──────────────────────────┐
-   ▼                                         │ Local bridge (Python)     │
- ┌──────────────────────────────────┐        │  ├─ device pairing        │
- │ API + Realtime gateway (FastAPI) │◄──────┤  ├─ outbound WSS (TLS)    │
- │  auth · projects · channels      │  out-  │  ├─ AgentAdapter          │
- │  tasks · decisions · agents      │  bound │  │   ├─ claude_code (-p)  │
- │  invocation router · audit       │        │  │   └─ codex (app-server)│
- └───────┬───────────────┬──────────┘        │  ├─ repo allow-list       │
-         │               │                   │  └─ local event queue     │
- ┌───────▼──────┐  ┌─────▼───────────┐       └──────────────────────────┘
- │ PostgreSQL   │  │ Object storage  │
- │ (all state)  │  │ (transcripts,   │
- └───────▲──────┘  │  attachments)   │
-         │         └─────────────────┘
- ┌───────┴────────────────────────┐
- │ Worker (outbox, imports,        │
- │ webhooks, notifications)        │
- └─────────────────────────────────┘
-```
-
-The bridge always initiates the connection. The hub never calls into a developer's machine.
-
-## 2. Repository layout (planned)
+## 1. Components
 
 ```
-collab-app/
-├─ backend/        FastAPI app, SQLAlchemy models, Alembic migrations, tests
-├─ frontend/       React + TypeScript + Vite + Tailwind
-├─ bridge/         Python CLI/daemon, harness adapters, bridge tests
-├─ shared/         Event envelope JSON Schema + generated types (single contract)
-├─ deploy/         Docker Compose (dev), Render blueprint, Vercel config
-├─ docs/           This folder
-├─ IMPLEMENTATION_PLAN.md
-└─ NatyaSutra_Collaboration_Hub_Implementation_Greenfield.md   (spec, unchanged)
+ Browser (React app)
+    │  HTTPS: /api/v1/...        WebSocket: /api/v1/ws/projects/{id}
+    ▼
+ Hub (FastAPI, one process on Render)  ── SQL ──▶ PostgreSQL (Supabase)
+    │  execution worker (in the hub process)
+    │  jobs:run / cancel (dispatcher service account)
+    ▼
+ Cloud Run Job: one execution per run  (the runtime container)
+    │  reads secrets ──▶ Secret Manager (Anthropic key, GitHub App key)
+    │  installation token + git clone ──▶ GitHub (read-only)
+    │  claude -p (read-only tools) ──▶ Anthropic API
+    │  lease exchange + events ──▶ Hub (HTTPS, bearer token)
 ```
 
-No file in this tree touches the NatyaSutra product runtime or database.
+- The **hub** serves the API, the built web app and the WebSocket. It owns all state. It is the only component that talks to the database.
+- The **execution worker** runs inside the hub. It starts runs on Cloud Run and asks Cloud Run to stop them.
+- A **run** is one Cloud Run job execution. It starts with one-use credentials, does one piece of work, reports its events to the hub and exits.
+- The **runtime** is the container image. It contains Claude Code, a pinned version, and no credentials of its own.
 
-## 3. Backend modules
+Nothing runs on a team member's machine.
 
-| Module | Responsibility |
+## 2. A mention becomes a reply
+
+1. A person posts a message with `@claude` in a channel. The hub saves the message, one **invocation** for each attached agent mentioned, and an **outbox** row, all in one transaction. It then broadcasts `message.created` and `agent.invocation.created`.
+2. The worker claims the outbox row. It mints a **run lease**: a random token, stored only as a hash, valid for 10 minutes and usable once. It calls `jobs:run` with the invocation id and the lease in the job's environment. It records the execution name and binds the lease to it.
+3. The run starts. The runtime calls `POST /api/v1/internal/executions/exchange` with the lease and the execution name. The hub checks the lease, marks the lease used, moves the invocation to `accepted`, and returns the prompt, the repository and a **runtime token** (15 minutes, scoped to this invocation).
+4. The runtime reads the Anthropic key from Secret Manager, gets a GitHub installation token for the one repository, clones it read-only, and runs Claude Code with read-only tools.
+5. The runtime sends events to `POST /api/v1/internal/executions/events`: `started`, `progress`, `output`, `message`, `completed`, or `failed`, with a heartbeat every 30 seconds. Each event has a sequence number, and the hub applies each one at most once.
+6. The hub turns events into live updates: progress frames for the progress line, output for the streaming text, and the reply as a channel message. The invocation becomes `completed` or `failed`.
+
+If the agent stops responding, the sweeper fails the run (see [Execution](components/execution.md)). If a person presses Stop, the invocation becomes `cancelled` at once, and the worker asks Cloud Run to stop the execution.
+
+## 3. A session turn
+
+A session turn follows the same path with two differences:
+
+- The invocation belongs to a session, not a channel, and its reply goes to the session transcript.
+- The run's prompt includes the session's earlier turns. Cloud runs start in a new container, so the earlier conversation is sent again each time, up to 40 turns and 20,000 characters. The stored invocation keeps only the new message. See [Backend](components/backend.md#sessions) for the details.
+
+Only one turn may be in progress per session. A second turn is refused until the first finishes.
+
+## 4. Run states
+
+```
+queued ──(runtime exchanges its lease)──▶ accepted ──(first progress or output)──▶ running
+   │                                         │                                       │
+   │                                         ├──── completed ◀─────────────────────────┤
+   │                                         ├──── failed (runtime error, sweeper, dispatch failure)
+   └──── cancelled (anyone allowed to stop it)
+```
+
+- `queued`: waiting for the worker, or waiting for the runtime to exchange its lease.
+- `accepted`: the runtime is up and holds its run context. No output yet.
+- `running`: output has started.
+- `completed`, `failed`, `cancelled`: final. A final state is never changed.
+
+## 5. Live updates
+
+Each project has one WebSocket at `/api/v1/ws/projects/{id}`. The client sends `since=<sequence>` to replay what it missed, then receives events as they happen.
+
+- Persistent events (messages, tasks, decisions, membership, runs) are stored with a project sequence number before they are sent.
+- Live-only events (streamed output text, progress lines) are not stored. A client that reconnects during a run catches up from the next event.
+- Events about a private session are sent only to its owner, both on replay and live. Events carry the session's visibility and owner, so the realtime handler can filter them.
+
+## 6. Data
+
+PostgreSQL (SQLite in development and tests) holds:
+
+| Area | Tables |
 |---|---|
-| `auth` | Registration, login, sessions, password hashing, rate limits. |
-| `authz` | The single place where project membership and role checks are made. Every route and WebSocket subscription calls it. |
-| `teams`, `projects` | Teams, projects, memberships, repository links. |
-| `discussions` | Channels, messages, threads, mentions, attachments. |
-| `tasks`, `decisions` | Records, transitions, revisions, links. |
-| `agents` | Agent registry, devices, capabilities, status. |
-| `invocations` | Creating, routing, tracking invocations and approvals. |
-| `events` | Envelope validation, persist-then-broadcast, sequencing, replay. |
-| `realtime` | WebSocket gateway; per-connection authorisation. |
-| `audit` | Append-only audit writes; read API. |
-| `search` | PostgreSQL full-text queries, always project-scoped. |
-| `git` | GitHub integration interface (Phase 5). |
-| `imports` | Conversation import pipeline (Phase 4). |
-| `worker` | Outbox consumer, retries, scheduled jobs. |
+| Identity | `users` (with `handle`), `auth_sessions`, `teams`, `team_memberships` |
+| Projects | `projects`, `project_memberships`, `channels`, `project_events`, `audit_events` |
+| Work | `messages`, `tasks`, `decisions`, `decision_revisions` |
+| Agents | `agents`, `project_agents`, `agent_invocations`, `agent_sessions`, `agent_session_messages` |
+| Runs | `execution_outbox`, `invocation_leases`, `run_events` |
 
-Dependencies point inward: routes → services → repositories. Services own authorisation calls and audit writes. Models never import routes.
+Migrations are in `backend/migrations/versions/`. The current head is `f2a3b4c5d6e7`.
 
-## 4. Data flows
+## 7. Where things run
 
-### 4.1 Human message in a channel
-1. Client POSTs a message. `authz` confirms membership in the project.
-2. Service writes `messages` and an `audit_events` row in one transaction; the same transaction writes an outbox row.
-3. Realtime gateway picks up the committed event and broadcasts it to subscribers of that project. Subscribers are authorised at subscribe time and re-checked on each send.
+| Piece | Where |
+|---|---|
+| Hub (API, web app, WebSocket, worker) | Render web service, one instance |
+| Database | Supabase PostgreSQL |
+| Runtime container | Google Cloud Run Jobs, project `natyasutra-agents`, region `us-west1` |
+| Runtime image | Artifact Registry, repository `agent-runtime` |
+| Secrets | Google Secret Manager (Anthropic key, GitHub App private key) |
+| Repositories | GitHub, through a GitHub App with read-only contents access |
 
-### 4.2 Agent mention (Phase 2)
-See [agent-protocol.md](agent-protocol.md) §5.
-
-### 4.3 Conversation import (Phase 4)
-Bridge scans configured source directories, runs secret detection locally, proposes a review report, then uploads only after the owner approves. Uploads are stored private to the owner. Sharing is a separate, audited action.
-
-## 5. Data stores
-
-- **PostgreSQL** — all collaboration state: users, teams, projects, memberships, channels, messages, tasks, decisions, agents, devices, invocations, approvals, events, audit, outbox, imported-conversation metadata, normalised messages.
-- **Object storage** — raw transcript originals and attachments only. Canonical requirements and code stay in Git.
-- **Local bridge storage** — a small SQLite file (or JSON-lines) for the outbound event queue and cursor. No credentials in this store beyond the short-lived access token held in memory or the OS keychain.
-
-PostgreSQL is authoritative. Nothing is cached elsewhere in Phase 1–3 (brief §12.2 "no Redis").
-
-## 6. Deployment targets
-
-| Component | Target | Verified? |
-|---|---|---|
-| Frontend | Served by the API container (no separate Vercel deployment) | Yes — live at Render |
-| API + realtime | Render web service (Docker) | Yes — live at Render |
-| Worker | Not deployed (the bridge runs on each developer's machine) | n/a |
-| Database | Supabase PostgreSQL (free plan, us-west-2) | Yes — migrated and verified |
-| Local dev | Docker Compose (PostgreSQL, API, worker) | Planned for Phase 1 |
-
-Configuration is environment-only. No production URLs or credentials appear in source.
-
-## 7. Non-functional targets (Phase 1)
-
-- WebSocket reconnect with exponential backoff and jitter on the client.
-- Event broadcast after commit only; no broadcast of uncommitted state.
-- All list endpoints paginated.
-- Health (`/health`, liveness) and readiness (`/ready`, checks DB connectivity).
-
-## 8. Implemented API surface (Phase 1)
-
-All routes are under `/api/v1`. "Member" means any project role; the minimum role is in brackets.
-
-| Method and path | Purpose | Minimum role |
-|---|---|---|
-| `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me` | Sessions | — |
-| `POST /teams`, `GET /teams`, `POST /teams/{id}/projects` | Teams and projects (team admin to create a project) | team member |
-| `GET /projects`, `GET /projects/{id}` | Projects you belong to; `latest_sequence` for resume | member |
-| `GET/POST /projects/{id}/members`, `PATCH/DELETE /projects/{id}/members/{user}` | Membership and roles | admin |
-| `GET/POST /projects/{id}/channels` | Channels | viewer / member |
-| `GET/POST /projects/{id}/channels/{cid}/messages` | Messages (`parent_message_id` for threads) | viewer / member |
-| `PATCH/DELETE /projects/{id}/messages/{mid}` | Edit (author) / soft delete (author or admin) | member |
-| `GET/POST /projects/{id}/tasks`, `GET/PATCH /projects/{id}/tasks/{tid}` | Tasks | viewer / member |
-| `GET/POST /projects/{id}/decisions`, `GET/PATCH /projects/{id}/decisions/{did}`, `…/revisions` | Decisions | viewer / member (status change: decision owner or admin) |
-| `GET /projects/{id}/activity?after=N` | Sequenced event feed | member |
-| `GET /projects/{id}/audit` | Audit log | admin |
-| `GET /projects/{id}/search?q=` | Search messages, tasks, decisions | member |
-| `WS /ws/projects/{id}?since=N` | Live events with replay | member |
-| `GET /health`, `GET /ready` (outside `/api/v1`) | Operations | — |
-
-Errors: `404` for absent or unauthorised project resources; `403` for insufficient role; `409` for conflicts;
-`422` for validation; `429` for rate limits; `403` with `CSRF check failed` for missing or mismatched CSRF.
-
-Event envelope (persisted in `project_events`, broadcast after commit):
-
-```json
-{ "event_id": "uuid", "schema_version": 1, "event_type": "conversation.message.created",
-  "project_id": "uuid", "sequence": 12, "occurred_at": "ISO-8601",
-  "actor_user_id": "uuid", "payload": { } }
-```
-
-Phase 1 event types: `conversation.channel.created`, `conversation.message.created`,
-`conversation.message.updated` (edit or delete), `task.created`, `task.updated`, `decision.updated`,
-`project.seeded` (seed data only). Heartbeats (`realtime.heartbeat`) are not persisted.
-
-## 9. Implemented API surface (Phase 2: devices, bridge and agents)
-
-| Method and path | Purpose | Auth |
-|---|---|---|
-| `POST /devices/pairing-codes` | One-time pairing code (10 min, single use) | session cookie + CSRF |
-| `GET /devices`, `DELETE /devices/{id}` | List own devices; revoke one (closes its socket) | session cookie + CSRF |
-| `GET /me/agents` | Agents owned by the current user, with online state | session cookie |
-| `POST /bridge/pair` | Redeem a pairing code; returns device id and secret once | pairing code (rate-limited) |
-| `POST /bridge/token` | Exchange device secret for a 15-minute access token | device secret |
-| `WS /bridge/ws` | Bridge channel: hello, heartbeat, acknowledgements, invocation streams | bearer token (no cookies) |
-| `GET /projects/{id}/agents` | Agents attached to the project, with online state | member |
-| `POST /projects/{id}/agents`, `DELETE /projects/{id}/agents/{agent}` | Attach or detach (owner, or admin) | member; owner or admin |
-| `GET /projects/{id}/invocations` | Recent invocation records | member |
-| `POST /projects/{id}/invocations/{inv}/cancel` | Cancel queued or running work | requester, owner, or admin |
-| `GET /projects/{id}/approvals?status=pending` | Approvals awaiting a decision | member |
-| `POST /projects/{id}/approvals/{approval}` | Approve or deny (409 if already decided or no longer awaited) | owner or admin |
-
-Mentions are processed at message creation: `POST /projects/{id}/channels/{cid}/messages` accepts `queue_if_offline` (default false). Messages written by agents carry `author_agent_handle`.
-
-Event types added in Phase 2: `agent.attached`, `agent.status.changed`, `agent.invocation.created`, `agent.invocation.delivered`, `agent.invocation.accepted`, `agent.invocation.rejected`, `agent.invocation.completed`, `agent.invocation.failed`, `agent.invocation.cancelled`, `agent.invocation.cancel_requested`, `agent.approval.required`, `agent.approval.resolved`, and `agent.output.delta` (broadcast only; never persisted or sequenced). Message creation from agent output uses `conversation.message.created`.
-
-The bridge wire contract is in [agent-protocol.md](agent-protocol.md).
-
-## 10. Implemented API surface (Phase 3: dedicated sessions)
-
-| Method and path | Purpose | Who |
-|---|---|---|
-| `POST /projects/{id}/sessions` `{agent_id, title, visibility}` | Open a session with an attached agent | member |
-| `GET /projects/{id}/sessions` | Sessions you can see (yours, plus shared ones) | member |
-| `GET /projects/{id}/sessions/{sid}` | One session | visible to you |
-| `GET /projects/{id}/sessions/{sid}/messages` | Transcript | visible to you |
-| `POST /projects/{id}/sessions/{sid}/turns` `{body, queue_if_offline}` | Send a message to the agent (one turn at a time) | owner |
-| `POST /projects/{id}/sessions/{sid}/visibility` `{visibility}` | Share (`project`) or make private | owner |
-| `POST /projects/{id}/sessions/{sid}/close` | Close the session | owner or admin |
-
-Cancelling a session turn uses `POST /projects/{id}/invocations/{inv}/cancel`.
-
-Data model: `agent_sessions` (owner, agent, title, visibility, harness session reference, status), `agent_session_messages` (transcript; never copied into events), and `agent_invocations.session_id` (channel is null for session turns).
-
-Harness continuity: a session stores the harness's own session id from the first turn's completion, and sends it with every later turn. Claude Code resumes with `--resume`; Codex with `thread/resume`.
-
-Cloud agents (Cloud Run Jobs) do not resume. Each run starts in a fresh container, so the harness's session files are gone when the run ends. Instead, the lease exchange builds the run's prompt from the session's earlier turns (`app/services/transcript.py`), capped at 40 turns and 20,000 characters. The transcript comes from the hub's own rows, and the invocation's stored prompt stays the bare message. Long sessions lose their oldest turns once the cap is reached.
-
-Possible next step: if the cloud agents need longer memory, run them as Cloud Run **services** instead of jobs. An instance can keep the harness's session files between messages while it stays up, so `--resume` could work for most turns. Cloud Run can still stop or replace an instance at any time, so the replay above would stay as the fallback. Before choosing that, weigh the cost of a warm instance against per-run jobs, and where the session files would be kept. They can include repository content the agent read, so they need the same retention and deletion rules as the transcript.
-
-Privacy, enforced in four places:
-- REST: sessions, transcripts, turns, and invocations are filtered in the query. Other members get 404, not 403.
-- Live: each event carries its session's `visibility` and `owner_user_id`. The realtime handler delivers private events only to the owner, both on replay and live, and this includes streamed output deltas.
-- Activity feed: private session events are removed for non-owners.
-- Approvals: a private session's approval is listed only to its owner and the agent's owner, and only they can decide it.
-
-Persisted events for session turns contain identifiers and visibility, never the message or delta text.
+The hub's single-instance rule is covered in [deployment](deployment.md#known-limits).
