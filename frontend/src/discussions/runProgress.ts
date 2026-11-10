@@ -29,6 +29,13 @@ export function applyRunEvent(
   const invocationId = typeof payload.invocation_id === "string" ? payload.invocation_id : null;
   if (!invocationId) return state;
 
+  // Sent as soon as the message is saved, before the agent starts. Shows "Queued" straight away.
+  if (event.event_type === "agent.invocation.created") {
+    if (payload.status !== "queued") return state;
+    const agentHandle = typeof payload.agent_handle === "string" ? payload.agent_handle : "agent";
+    return { ...state, [invocationId]: { invocationId, agentHandle, stage: "Queued", updatedAt: now } };
+  }
+
   if (event.event_type === "agent.invocation.progress") {
     const agentHandle = typeof payload.agent_handle === "string" ? payload.agent_handle : "agent";
     const stage = typeof payload.stage === "string" ? payload.stage : "";

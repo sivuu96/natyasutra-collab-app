@@ -86,3 +86,21 @@ describe("activeRuns", () => {
     expect(activeRuns(state, now + STALE_AFTER_MS + 1)).toHaveLength(0);
   });
 });
+
+describe("queued runs", () => {
+  it("shows a run as queued as soon as it is created", () => {
+    const state = applyRunEvent({}, {
+      event_type: "agent.invocation.created",
+      payload: { invocation_id: "q1", agent_handle: "claude", status: "queued" },
+    }, 5);
+    expect(state.q1).toEqual({ invocationId: "q1", agentHandle: "claude", stage: "Queued", updatedAt: 5 });
+  });
+
+  it("ignores runs created already rejected", () => {
+    const state: RunProgressMap = {};
+    expect(applyRunEvent(state, {
+      event_type: "agent.invocation.created",
+      payload: { invocation_id: "q2", agent_handle: "claude", status: "rejected" },
+    })).toBe(state);
+  });
+});
