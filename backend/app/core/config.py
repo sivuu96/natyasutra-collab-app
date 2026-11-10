@@ -4,7 +4,7 @@ import os
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     bridge_token_minutes: int = 15
     bridge_heartbeat_timeout_seconds: int = 60
     pairing_code_minutes: int = 10
+
+    # Where agent runs execute. "bridge" keeps the developer-machine bridge (default). "fake" runs the outbox
+    # with a deterministic in-process provider (tests and local runs). "cloud_run" starts ephemeral Cloud Run jobs.
+    execution_provider: Literal["bridge", "fake", "cloud_run"] = "bridge"
+    # Public base URL of the hub, given to runtime jobs for their callbacks. Render sets RENDER_EXTERNAL_URL.
+    hub_base_url: str | None = None
+    gcp_project_id: str | None = None
+    gcp_region: str = "us-west1"
+    gcp_job_name: str = "collab-agent-runtime"
+    # Base64 of the dispatcher service-account JSON key. A secret: never logged or returned by the API.
+    gcp_dispatcher_key: SecretStr | None = None
+    execution_worker_enabled: bool = True
+    execution_worker_interval_seconds: float = 5.0
 
     # Secure cookies are the production default. Set COOKIE_SECURE=false only for plain-HTTP local testing
     # of a production build; never on a public HTTPS deployment.
@@ -68,6 +81,15 @@ class Settings(BaseSettings):
         external = os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
         if external and external not in self.cors_origins:
             self.cors_origins = [*self.cors_origins, external]
+        if self.hub_base_url is None and external:
+            self.hub_base_url = external
+        if self.execution_provider == "cloud_run":
+            if not self.gcp_project_id:
+                raise ValueError("GCP_PROJECT_ID is required when EXECUTION_PROVIDER=cloud_run")
+            if self.gcp_dispatcher_key is None:
+                raise ValueError("GCP_DISPATCHER_KEY is required when EXECUTION_PROVIDER=cloud_run")
+            if not self.hub_base_url:
+                raise ValueError("HUB_BASE_URL (or RENDER_EXTERNAL_URL) is required when EXECUTION_PROVIDER=cloud_run")
         if self.environment == "production":
             if not self.bridge_token_secret or len(self.bridge_token_secret) < 32:
                 raise ValueError("BRIDGE_TOKEN_SECRET must be set (at least 32 characters) in production")

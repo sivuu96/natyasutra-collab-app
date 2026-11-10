@@ -62,8 +62,9 @@ class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     owner_user_id: Mapped[uuid.UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    device_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, ForeignKey("bridge_devices.id", ondelete="CASCADE"), nullable=False, index=True
+    # Null for cloud agents, which run on the execution provider instead of a developer machine.
+    device_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("bridge_devices.id", ondelete="CASCADE"), nullable=True, index=True
     )
     handle: Mapped[str] = mapped_column(String(40), nullable=False)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)

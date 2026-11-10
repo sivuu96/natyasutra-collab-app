@@ -19,7 +19,7 @@ from app.deps import get_current_user, get_db
 from app.models import Agent, AgentInvocation, AgentSession, AgentSessionMessage, ProjectAgent, User
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, ProjectRole, SessionStatus, SessionVisibility
 from app.realtime.hub import hub
-from app.services.agents import Outcome, apply_outcome, create_session_turn, dispatch_invocations
+from app.services.agents import Outcome, apply_outcome, create_session_turn, dispatch_for_mode
 from app.services.audit import record_audit
 from app.services.authz import ROLE_RANK, load_project_for
 from app.services.events import record_event
@@ -275,6 +275,7 @@ def post_turn(
             requester=user,
             queue_if_offline=payload.queue_if_offline,
             outcome=outcome,
+            execution_mode=request.app.state.execution_mode,
         )
     except ValueError as error:
         db.rollback()
@@ -292,7 +293,7 @@ def post_turn(
     for event_project, event in outcome.publish:
         hub.publish(event_project, event)
 
-    dispatch = dispatch_invocations(db, [invocation_id])
+    dispatch = dispatch_for_mode(db, [invocation_id], request.app.state.execution_mode)
     db.commit()
     apply_outcome(dispatch)
     invocation = db.get(AgentInvocation, invocation_id)

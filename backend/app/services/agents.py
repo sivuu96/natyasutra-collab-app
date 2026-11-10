@@ -40,6 +40,7 @@ from app.realtime.hub import hub
 from app.services.audit import record_audit
 from app.services.bridge_protocol import HANDLE_PATTERN, PROTOCOL_VERSION, HelloPayload, InvocationFailed
 from app.services.events import record_event
+from app.services.execution import enqueue_dispatch
 
 TERMINAL_VALUES = frozenset(status.value for status in TERMINAL_INVOCATION_STATUSES)
 
@@ -187,6 +188,7 @@ def create_invocations_for_message(
     requester: User,
     queue_if_offline: bool,
     outcome: Outcome,
+    execution_mode: str = "bridge",
 ) -> list[uuid.UUID]:
     """Called inside the message-creation transaction. Returns invocation ids to dispatch after commit.
 
@@ -202,12 +204,7 @@ def create_invocations_for_message(
         )
         if attached is None:
             continue  # not attached to this project: mention is plain text
-        device = db.get(BridgeDevice, agent.device_id)
-        online = device is not None and device_is_online(device)
-        if online or queue_if_offline:
-            status, error_code = InvocationStatus.QUEUED, None
-        else:
-            status, error_code = InvocationStatus.REJECTED, "agent_offline"
+        status, error_code = _initial_status(db, agent, queue_if_offline, execution_mode)
 
         invocation = AgentInvocation(
             project_id=project_id,
@@ -223,6 +220,8 @@ def create_invocations_for_message(
         )
         db.add(invocation)
         db.flush()
+        if execution_mode != "bridge":
+            enqueue_dispatch(db, invocation.id)  # same transaction as the invocation
         record_audit(
             db,
             action="agent.invocation.created",
@@ -261,17 +260,13 @@ def create_session_turn(
     requester: User,
     queue_if_offline: bool,
     outcome: Outcome,
+    execution_mode: str = "bridge",
 ) -> uuid.UUID:
     """One turn of a dedicated session. Same offline rules as a mention; resumes the session's harness thread."""
     agent = db.get(Agent, session.agent_id)
     if agent is None or agent.revoked_at is not None:
         raise ValueError("agent is no longer available")
-    device = db.get(BridgeDevice, agent.device_id)
-    online = device is not None and device_is_online(device)
-    if online or queue_if_offline:
-        status, error_code = InvocationStatus.QUEUED, None
-    else:
-        status, error_code = InvocationStatus.REJECTED, "agent_offline"
+    status, error_code = _initial_status(db, agent, queue_if_offline, execution_mode)
     invocation = AgentInvocation(
         project_id=session.project_id,
         agent_id=agent.id,
@@ -287,6 +282,8 @@ def create_session_turn(
     )
     db.add(invocation)
     db.flush()
+    if execution_mode != "bridge":
+        enqueue_dispatch(db, invocation.id)
     session.last_activity_at = utcnow()
     record_audit(
         db,
@@ -314,6 +311,26 @@ def create_session_turn(
         )
     )
     return invocation.id
+
+
+def _initial_status(
+    db: Session, agent: Agent, queue_if_offline: bool, execution_mode: str
+) -> tuple[InvocationStatus, str | None]:
+    """Cloud runs are always queued: the outbox worker starts them. Bridge runs depend on device presence."""
+    if execution_mode != "bridge":
+        return InvocationStatus.QUEUED, None
+    device = db.get(BridgeDevice, agent.device_id) if agent.device_id else None
+    online = device is not None and device_is_online(device)
+    if online or queue_if_offline:
+        return InvocationStatus.QUEUED, None
+    return InvocationStatus.REJECTED, "agent_offline"
+
+
+def dispatch_for_mode(db: Session, invocation_ids: list[uuid.UUID], execution_mode: str) -> Outcome:
+    """Bridge mode hands work to connected devices now. Other modes leave it to the outbox worker."""
+    if execution_mode != "bridge":
+        return Outcome()
+    return dispatch_invocations(db, invocation_ids)
 
 
 def dispatch_invocations(db: Session, invocation_ids: list[uuid.UUID]) -> Outcome:

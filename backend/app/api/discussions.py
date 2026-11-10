@@ -14,7 +14,7 @@ from app.deps import get_current_user, get_db
 from app.models import Agent, Channel, Message, User
 from app.models.enums import AuditOutcome, ProjectRole
 from app.realtime.hub import hub
-from app.services.agents import Outcome, apply_outcome, create_invocations_for_message, dispatch_invocations
+from app.services.agents import Outcome, apply_outcome, create_invocations_for_message, dispatch_for_mode
 from app.services.audit import record_audit
 from app.services.authz import ROLE_RANK, load_project_for
 from app.services.events import record_event
@@ -189,6 +189,7 @@ def post_message(
         requester=user,
         queue_if_offline=payload.queue_if_offline,
         outcome=creation,
+        execution_mode=request.app.state.execution_mode,
     )
     db.commit()
     db.refresh(message)
@@ -196,7 +197,7 @@ def post_message(
     for project_for_event, event in creation.publish:
         hub.publish(project_for_event, event)
     # Only after commit: hand work to bridges, then record delivery.
-    dispatch = dispatch_invocations(db, invocation_ids)
+    dispatch = dispatch_for_mode(db, invocation_ids, request.app.state.execution_mode)
     db.commit()
     apply_outcome(dispatch)
     return _message_out(db, message)

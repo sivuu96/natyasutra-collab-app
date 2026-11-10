@@ -22,6 +22,8 @@ from app.core.ratelimit import RateLimiter
 from app.db.session import make_engine, make_session_factory
 from app.deps import CSRF_COOKIE, CSRF_HEADER
 from app.realtime.hub import hub
+from app.services.execution_worker import run_outbox_worker
+from app.services.providers import build_execution_provider
 
 logger = logging.getLogger("app")
 
@@ -49,11 +51,27 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
         logger.warning("BRIDGE_TOKEN_SECRET not set; generated an ephemeral secret for this process")
     db_engine = engine or make_engine(settings.database_url)
 
+    execution_provider = build_execution_provider(settings)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         hub.bind_loop(asyncio.get_running_loop())
         logger.info("app starting", extra={"environment": settings.environment})
+        worker_stop = asyncio.Event()
+        worker: asyncio.Task[None] | None = None
+        if execution_provider is not None and settings.execution_worker_enabled:
+            worker = asyncio.create_task(
+                run_outbox_worker(
+                    app.state.session_factory,
+                    execution_provider,
+                    interval_seconds=settings.execution_worker_interval_seconds,
+                    stop=worker_stop,
+                )
+            )
         yield
+        worker_stop.set()
+        if worker is not None:
+            await worker
         db_engine.dispose()
         logger.info("app stopped")
 
@@ -62,6 +80,8 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.state.engine = db_engine
     app.state.session_factory = make_session_factory(db_engine)
     app.state.rate_limiter = RateLimiter()
+    app.state.execution_mode = settings.execution_provider
+    app.state.execution_provider = execution_provider
 
     app.add_middleware(
         CORSMiddleware,
