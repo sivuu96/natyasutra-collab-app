@@ -30,6 +30,12 @@ export interface Member {
   handle: string | null;
 }
 
+export interface MemberCandidate {
+  user_id: string;
+  email: string;
+  display_name: string;
+}
+
 export interface Channel {
   id: string;
   project_id: string;

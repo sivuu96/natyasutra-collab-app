@@ -4,8 +4,9 @@ import re
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import (
@@ -230,6 +231,43 @@ def add_member(
     )
     db.commit()
     return MemberOut(user_id=target.id, email=target.email, display_name=target.display_name, role=payload.role)
+
+
+class MemberCandidateOut(BaseModel):
+    user_id: uuid.UUID
+    email: str
+    display_name: str
+
+
+@router.get("/projects/{project_id}/member-candidates", response_model=list[MemberCandidateOut])
+def member_candidates(
+    project_id: uuid.UUID,
+    q: str = Query(default="", max_length=120),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[MemberCandidateOut]:
+    """People you already share a project with who are not in this one. Suggestions only: it never lists everyone."""
+    load_project_for(db, user, project_id, ProjectRole.ADMIN)
+    term = q.strip().lower()
+    if len(term) < 2:
+        return []
+    my_projects = select(ProjectMembership.project_id).where(ProjectMembership.user_id == user.id)
+    already_in = select(ProjectMembership.user_id).where(ProjectMembership.project_id == project_id)
+    pattern = f"%{term}%"
+    rows = db.scalars(
+        select(User)
+        .join(ProjectMembership, ProjectMembership.user_id == User.id)
+        .where(
+            ProjectMembership.project_id.in_(my_projects),
+            User.id != user.id,
+            User.id.not_in(already_in),
+            or_(func.lower(User.email).like(pattern), func.lower(User.display_name).like(pattern)),
+        )
+        .distinct()
+        .order_by(User.display_name)
+        .limit(8)
+    ).all()
+    return [MemberCandidateOut(user_id=u.id, email=u.email, display_name=u.display_name) for u in rows]
 
 
 @router.patch("/projects/{project_id}/members/{member_user_id}", response_model=MemberOut)
