@@ -174,8 +174,16 @@ def _report_run(
                 try:
                     prepare_repo(repository, ref, repo_dir)
                 except GitHubError as error:
-                    log.error("repository preparation failed: %s", error.code)
-                    sequencer.send("failed", code=error.code, message="The repository could not be prepared.")
+                    # The detail is git's own message, already scrubbed of the token. Logged for operators and
+                    # shortened for the channel, so people can see why a run stopped.
+                    detail = " ".join((error.message or "").split())[:200]
+                    log.error("repository preparation failed: %s %s", error.code, detail)
+                    reason = f": {detail}" if detail else ""
+                    sequencer.send(
+                        "failed",
+                        code=error.code,
+                        message=f"The repository could not be prepared ({error.code}){reason}",
+                    )
                     return 1
                 cwd = repo_dir
             command = build_claude_args(
