@@ -107,7 +107,7 @@ def run(
     hub: HubClient,
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
-    prepare_repo: Callable[[str, str, str], None] | None = None,
+    prepare_repo: Callable[[str, str, str], bool | None] | None = None,
 ) -> int:
     """Run one invocation. Returns the process exit code. Every outcome is reported to the hub first."""
     lease = env.pop("RUN_LEASE", "")  # the lease must not remain in the environment
@@ -144,7 +144,7 @@ def _report_run(
     hub: HubClient,
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
-    prepare_repo: Callable[[str, str, str], None] | None,
+    prepare_repo: Callable[[str, str, str], bool | None] | None,
     run_finished: threading.Event,
 ) -> int:
     """Work the run and report every step. Returns the exit code."""
@@ -172,7 +172,7 @@ def _report_run(
                 repo_dir = os.path.join(workdir, "repo")
                 sequencer.send("progress", text=f"Preparing the repository {repository}")
                 try:
-                    prepare_repo(repository, ref, repo_dir)
+                    has_files = prepare_repo(repository, ref, repo_dir)
                 except GitHubError as error:
                     # The detail is git's own message, already scrubbed of the token. Logged for operators and
                     # shortened for the channel, so people can see why a run stopped.
@@ -185,10 +185,19 @@ def _report_run(
                         message=f"The repository could not be prepared ({error.code}){reason}",
                     )
                     return 1
+                if has_files is False:
+                    # An empty repository: there is nothing to read. Say so to the agent, so it answers plainly.
+                    os.makedirs(repo_dir, exist_ok=True)
+                    prompt = (
+                        f"The repository {repository} has no commits yet, so there are no files to read. "
+                        "Tell the user that. Do not invent code or file contents.\n\n" + context["prompt"]
+                    )
+                else:
+                    prompt = context["prompt"]
                 cwd = repo_dir
-            command = build_claude_args(
-                shlex.split(config.claude_binary), model=config.claude_model, prompt=context["prompt"]
-            )
+            else:
+                prompt = context["prompt"]
+            command = build_claude_args(shlex.split(config.claude_binary), model=config.claude_model, prompt=prompt)
 
             def emit(text: str) -> None:
                 if run_finished.is_set():
@@ -253,10 +262,10 @@ def main() -> int:
 
 def make_repo_preparer(
     config: Config, read_secret: Callable[[str, str], str], http: httpx.Client
-) -> Callable[[str, str, str], None]:
+) -> Callable[[str, str, str], bool]:
     """Build the function that prepares a repository: read the App key, get a token, clone one branch."""
 
-    def prepare(repository: str, ref: str, destination: str) -> None:
+    def prepare(repository: str, ref: str, destination: str) -> bool:
         if not config.github_app_id or not config.github_installation_id:
             raise GitHubError("github_not_configured")
         try:
@@ -271,6 +280,6 @@ def make_repo_preparer(
             repo_full_name=repository,
         )
         private_key = ""
-        clone_repository(repo_full_name=repository, ref=ref, token=token, destination=destination)
+        return clone_repository(repo_full_name=repository, ref=ref, token=token, destination=destination)
 
     return prepare

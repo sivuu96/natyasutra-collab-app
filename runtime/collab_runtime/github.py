@@ -83,20 +83,37 @@ def clone_repository(
     destination: str,
     base_url: str = GITHUB_WEB,
     git: str = "git",
-) -> None:
-    """Shallow-clone one branch. Raises GitHubError with a code; never includes the token in messages."""
+) -> bool:
+    """Shallow-clone one branch. Returns False, without cloning, when the repository has no commits at all.
+
+    Raises GitHubError with a code; never includes the token in messages.
+    """
     validate_repo(repo_full_name)
     validate_ref(ref)
     url = f"{base_url.rstrip('/')}/{repo_full_name}.git"
-    command = [git, "-c", "credential.helper=", "-c", "core.askPass="]
+    prefix = [git, "-c", "credential.helper=", "-c", "core.askPass="]
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        command += ["-c", f"http.extraHeader=Authorization: basic {basic}"]
-    command += ["clone", "--depth", "50", "--single-branch", "--branch", ref, url, destination]
+        prefix += ["-c", f"http.extraHeader=Authorization: basic {basic}"]
+
+    # An empty repository has no refs to clone. Check first, so it is reported as empty, not as a failed clone.
+    probe = _git(prefix + ["ls-remote", url], destination, token)
+    if probe.returncode != 0:
+        raise GitHubError("clone_failed", _scrub(probe.stderr, token))
+    if not probe.stdout.strip():
+        return False
+
+    result = _git(prefix + ["clone", "--depth", "50", "--single-branch", "--branch", ref, url, destination], destination, token)
+    if result.returncode != 0:
+        raise GitHubError("clone_failed", _scrub(result.stderr, token))
+    return True
+
+
+def _git(command: list[str], home: str, token: str) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
+        return subprocess.run(
             command,
-            env={"PATH": _path(), "GIT_TERMINAL_PROMPT": "0", "HOME": destination},
+            env={"PATH": _path(), "GIT_TERMINAL_PROMPT": "0", "HOME": home},
             capture_output=True,
             text=True,
             timeout=CLONE_TIMEOUT_SECONDS,
@@ -106,10 +123,11 @@ def clone_repository(
         raise GitHubError("clone_timeout") from error
     except OSError as error:
         raise GitHubError("git_missing", type(error).__name__) from error
-    if result.returncode != 0:
-        # git's own messages do not include the header, but scrub it anyway.
-        detail = result.stderr.replace(token, "[redacted]") if token else result.stderr
-        raise GitHubError("clone_failed", detail[-300:])
+
+
+def _scrub(text: str, token: str) -> str:
+    # git's own messages do not include the header, but scrub it anyway.
+    return text.replace(token, "[redacted]")[-300:] if token else text[-300:]
 
 
 def _path() -> str:

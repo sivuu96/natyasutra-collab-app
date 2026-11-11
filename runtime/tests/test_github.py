@@ -301,3 +301,73 @@ def test_the_preparer_refuses_when_github_is_not_configured(tmp_path: Path) -> N
 
 def test_shlex_splits_the_binary_setting_with_quoted_paths() -> None:
     assert shlex.split(f'"{sys.executable}" fake.py') == [sys.executable, "fake.py"]
+
+
+def test_an_empty_repository_is_reported_without_a_clone_failure(tmp_path: Path) -> None:
+    bare = tmp_path / "remote" / "sivuu96" / "Natyasutra.git"
+    bare.parent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    destination = tmp_path / "dest" / "repo"
+
+    cloned = clone_repository(
+        repo_full_name="sivuu96/Natyasutra",
+        ref="main",
+        token="",
+        destination=str(destination),
+        base_url=(tmp_path / "remote").as_posix(),
+    )
+
+    assert cloned is False
+    assert not (destination / ".git").exists()
+
+
+def test_a_missing_branch_in_a_non_empty_repository_is_still_a_clone_failure(tmp_path: Path) -> None:
+    remote = _bare_remote(tmp_path / "remote", "sivuu96", "Natyasutra", "main")
+    with pytest.raises(GitHubError) as error:
+        clone_repository(
+            repo_full_name="sivuu96/Natyasutra",
+            ref="develop",
+            token="",
+            destination=str(tmp_path / "dest"),
+            base_url=remote.as_posix(),
+        )
+    assert error.value.code == "clone_failed"
+
+
+PROMPT_ECHO_HARNESS = """
+import json, sys
+prompt = sys.argv[sys.argv.index("-p") + 1]
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": prompt}]}}), flush=True)
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "ok", "session_id": "s"}), flush=True)
+"""
+
+
+def test_a_run_on_an_empty_repository_completes_and_tells_the_agent(tmp_path: Path) -> None:
+    hub = FakeHub(
+        context={
+            "prompt": "what is in this repo?",
+            "harness": "claude_code",
+            "runtime_token": "runtime-token",
+            "repository": "sivuu96/Natyasutra",
+            "ref": "main",
+        }
+    )
+
+    def prepare(_repository: str, _ref: str, destination: str) -> bool:
+        Path(destination).mkdir(parents=True, exist_ok=True)
+        return False
+
+    code = run(
+        _config(_write_fake_harness(tmp_path, PROMPT_ECHO_HARNESS)),
+        env={"RUN_LEASE": "lease", "CLOUD_RUN_EXECUTION": "x"},
+        hub=hub,  # type: ignore[arg-type]
+        read_secret=lambda _p, _n: "sk-ant-api03-TESTKEY123456",
+        runner=ClaudeRunner(timeout_seconds=20),
+        prepare_repo=prepare,
+    )
+    assert code == 0, hub.events
+    assert hub.events[-1]["type"] == "completed"
+    assert all(event["type"] != "failed" for event in hub.events)
+    echoed = " ".join(event.get("text", "") for event in hub.events if event["type"] in ("output", "message"))
+    assert "has no commits yet" in echoed
+    assert "what is in this repo?" in echoed
