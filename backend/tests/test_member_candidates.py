@@ -1,4 +1,4 @@
-"""Suggestions when adding a person: only people who share a project with you, and never existing members."""
+"""Suggestions when adding a person: any account not already in the project, for admins only."""
 
 from collections.abc import Callable
 
@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from helpers import API, add_member, create_project, register
 
 
-def test_suggestions_show_people_you_share_a_project_with_and_not_strangers(
+def test_suggestions_find_any_account_not_already_in_the_project(
     client_factory: Callable[[], TestClient],
 ) -> None:
     owner = client_factory()
@@ -31,8 +31,8 @@ def test_suggestions_show_people_you_share_a_project_with_and_not_strangers(
         return [item["email"] for item in response.json()]
 
     assert search("cand-teammate") == ["cand-teammate@example.com"]
+    assert search("cand-stranger") == ["cand-stranger@example.com"]  # any account can be found
     assert search("cand-inside") == []  # already a member of this project
-    assert search("cand-stranger") == []  # shares no project with the owner
     assert search("c") == []  # too short to suggest
 
 

@@ -246,24 +246,19 @@ def member_candidates(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[MemberCandidateOut]:
-    """People you already share a project with who are not in this one. Suggestions only: it never lists everyone."""
+    """Accounts that match the search and are not yet in this project. Admins only; at most eight results."""
     load_project_for(db, user, project_id, ProjectRole.ADMIN)
     term = q.strip().lower()
     if len(term) < 2:
         return []
-    my_projects = select(ProjectMembership.project_id).where(ProjectMembership.user_id == user.id)
     already_in = select(ProjectMembership.user_id).where(ProjectMembership.project_id == project_id)
     pattern = f"%{term}%"
     rows = db.scalars(
         select(User)
-        .join(ProjectMembership, ProjectMembership.user_id == User.id)
         .where(
-            ProjectMembership.project_id.in_(my_projects),
-            User.id != user.id,
             User.id.not_in(already_in),
             or_(func.lower(User.email).like(pattern), func.lower(User.display_name).like(pattern)),
         )
-        .distinct()
         .order_by(User.display_name)
         .limit(8)
     ).all()
