@@ -11,6 +11,7 @@ import signal
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,13 @@ from collab_runtime.hub import HubClient, HubError
 log = logging.getLogger("collab.runtime")
 
 SUPPORTED_HARNESSES = {"claude_code"}
+
+# Timing is logged as milliseconds since this process started, so the job's start-up cost shows up too.
+_PROCESS_START = time.monotonic()
+
+
+def _mark(stage: str) -> None:
+    log.info("timing stage=%s ms=%d", stage, round((time.monotonic() - _PROCESS_START) * 1000))
 
 
 @dataclass(frozen=True)
@@ -116,8 +124,10 @@ def run(
         log.error("missing run lease or execution name")
         return 2
 
+    _mark("start")
     try:
         context = hub.exchange(lease=lease, execution_name=execution_name)
+        _mark("exchanged")
     except HubError as error:
         log.error("lease exchange refused: %s", error.code)
         return 3  # no runtime token exists, so the run cannot be reported; the hub's run timeout handles it
@@ -156,6 +166,7 @@ def _report_run(
 
         try:
             api_key = read_secret(config.project_id, config.anthropic_secret_name)
+            _mark("secret_read")
         except Exception as error:  # a missing secret must fail the run, never run without a key
             log.error("secret unavailable: %s", type(error).__name__)
             sequencer.send("failed", code="secret_unavailable", message="The agent's credentials are unavailable.")
@@ -173,6 +184,7 @@ def _report_run(
                 sequencer.send("progress", text=f"Preparing the repository {repository}")
                 try:
                     has_files = prepare_repo(repository, ref, repo_dir)
+                    _mark("repo_ready")
                 except GitHubError as error:
                     # The detail is git's own message, already scrubbed of the token. Logged for operators and
                     # shortened for the channel, so people can see why a run stopped.
@@ -199,9 +211,14 @@ def _report_run(
                 prompt = context["prompt"]
             command = build_claude_args(shlex.split(config.claude_binary), model=config.claude_model, prompt=prompt)
 
+            first_output = [True]
+
             def emit(text: str) -> None:
                 if run_finished.is_set():
                     return
+                if first_output[0]:
+                    first_output[0] = False
+                    _mark("first_output")
                 try:
                     sequencer.send("output", text=text)
                 except HubError as error:
@@ -212,6 +229,7 @@ def _report_run(
                     runner.terminate()
 
             sequencer.send("progress", text="Running the agent")
+            _mark("agent_started")
             outcome = runner.run(
                 command=command,
                 api_key=api_key,
@@ -219,6 +237,7 @@ def _report_run(
                 cwd=cwd,
                 emit_text=emit,
             )
+            _mark("agent_finished")
         if run_finished.is_set():
             return 0
         api_key = ""  # drop the reference as soon as the harness has finished
@@ -228,6 +247,7 @@ def _report_run(
             if outcome.final_text:
                 sequencer.send("message", text=outcome.final_text)
             sequencer.send("completed")
+            _mark("completed")
             return 0
         sequencer.send("failed", code=outcome.error_code or "runtime_failed", message=outcome.error_message)
         return 1
