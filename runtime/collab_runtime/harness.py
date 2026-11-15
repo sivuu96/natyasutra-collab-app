@@ -26,14 +26,26 @@ def redact(text: str, api_key: str) -> str:
     return ANTHROPIC_KEY_SHAPE.sub("[redacted]", text)
 
 
-def build_claude_args(binary: list[str], *, model: str, prompt: str) -> list[str]:
-    # Read-only tools, the prompt last, then the output format; plus an explicit model.
+def build_claude_args(
+    binary: list[str],
+    *,
+    model: str,
+    prompt: str,
+    session_id: str | None = None,
+    resume: bool = False,
+) -> list[str]:
+    """Arguments for one CLI turn. `session_id` starts a conversation with that ID; `resume` continues it."""
+    session: list[str] = []
+    if session_id is not None:
+        session = ["--resume", session_id] if resume else ["--session-id", session_id]
+    # Read-only tools, the session, the prompt last, then the output format; plus an explicit model.
     return [
         *binary,
         "--allowedTools",
         *ALLOWED_TOOLS,
         "--model",
         model,
+        *session,
         "-p",
         prompt,
         "--output-format",

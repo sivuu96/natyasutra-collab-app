@@ -371,3 +371,37 @@ def test_a_run_on_an_empty_repository_completes_and_tells_the_agent(tmp_path: Pa
     echoed = " ".join(event.get("text", "") for event in hub.events if event["type"] in ("output", "message"))
     assert "has no commits yet" in echoed
     assert "what is in this repo?" in echoed
+
+
+def test_a_refresh_brings_an_existing_clone_up_to_the_latest_commit(tmp_path: Path) -> None:
+    from collab_runtime.github import clone_repository, refresh_repository
+
+    remote = _bare_remote(tmp_path / "remote", "owner", "name", "main")
+    destination = tmp_path / "clone"
+    assert clone_repository(repo_full_name="owner/name", ref="main", token="", destination=str(destination),
+                            base_url=remote.as_posix())
+    # Someone pushes a new commit to the remote after the clone was made.
+    pusher = tmp_path / "pusher"
+    git = ["git", "-c", "user.email=t@example.com", "-c", "user.name=test"]
+    subprocess.run(["git", "clone", "-q", (remote / "owner" / "name.git").as_posix(), str(pusher)], check=True)
+    (pusher / "README.md").write_text("updated after the first turn\n", encoding="utf-8")
+    subprocess.run([*git, "-C", str(pusher), "commit", "-q", "-am", "second"], check=True)
+    subprocess.run(["git", "-C", str(pusher), "push", "-q", "origin", "main"], check=True)
+
+    assert (destination / "README.md").read_text(encoding="utf-8") == "hello from the repository\n"
+    refresh_repository(repo_full_name="owner/name", ref="main", token="", destination=str(destination),
+                       base_url=remote.as_posix())
+    assert (destination / "README.md").read_text(encoding="utf-8") == "updated after the first turn\n"
+
+
+def test_a_refresh_that_cannot_reach_the_remote_is_a_fetch_failure(tmp_path: Path) -> None:
+    from collab_runtime.github import clone_repository, refresh_repository
+
+    remote = _bare_remote(tmp_path / "remote", "owner", "name", "main")
+    destination = tmp_path / "clone"
+    clone_repository(repo_full_name="owner/name", ref="main", token="", destination=str(destination),
+                     base_url=remote.as_posix())
+    with pytest.raises(GitHubError) as error:
+        refresh_repository(repo_full_name="owner/name", ref="main", token="", destination=str(destination),
+                           base_url=(tmp_path / "gone").as_posix())
+    assert error.value.code == "fetch_failed"

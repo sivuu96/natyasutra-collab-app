@@ -26,6 +26,9 @@ class ExchangeOut(BaseModel):
     runtime_expires_in: int
     repository: str | None = None
     ref: str | None = None
+    session_id: str | None = None
+    message: str | None = None
+    previous_invocation_id: str | None = None
 
 
 def _bearer(authorization: str | None) -> str:
@@ -64,6 +67,9 @@ def exchange(
         runtime_expires_in=context.runtime_expires_in,
         repository=context.repository,
         ref=context.ref,
+        session_id=context.session_id,
+        message=context.message,
+        previous_invocation_id=context.previous_invocation_id,
     )
 
 
