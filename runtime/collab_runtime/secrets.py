@@ -1,6 +1,6 @@
-"""Read one secret from Google Secret Manager as the job's runtime service account.
+"""Read one secret from Google Secret Manager as the runtime's service account.
 
-The job runs as `agent-runtime`, so Cloud Run supplies its credentials automatically. No key file is used.
+The runtime runs as `agent-runtime`, so Cloud Run supplies its credentials automatically. No key file is used.
 """
 
 

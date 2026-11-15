@@ -1,14 +1,12 @@
-"""Runtime entrypoint. One job execution runs one invocation, then exits.
+"""Agent run logic. The warm-instance service (service.py) calls run() once per invocation.
 
 Flow: exchange the run lease -> read the API key from Secret Manager -> run the harness in an empty workspace
--> report events to the hub -> exit. The lease is removed from the environment immediately after it is read.
+-> report events to the hub. The lease arrives in the request and is used once.
 """
 
 import logging
 import os
 import shlex
-import signal
-import sys
 import tempfile
 import threading
 import time
@@ -27,9 +25,8 @@ log = logging.getLogger("collab.runtime")
 
 SUPPORTED_HARNESSES = {"claude_code"}
 
-# Timing is logged as milliseconds since the run began. A run starts when the process starts (job) or when the
-# service receives the request (service); each run sets its own start.
-_RUN_START: ContextVar[float] = ContextVar("run_start", default=time.monotonic())
+# Timing is logged as milliseconds since the run began. Each run sets its own start when it begins.
+_RUN_START: ContextVar[float] = ContextVar("run_start", default=0.0)
 
 
 def _mark(stage: str) -> None:
@@ -113,23 +110,15 @@ class Heartbeat:
 def run(
     config: Config,
     *,
-    env: dict[str, str],
     hub: HubClient,
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
     prepare_repo: Callable[[str, str, str], bool | None] | None = None,
-    lease: str | None = None,
-    execution_name: str | None = None,
+    lease: str,
+    execution_name: str,
 ) -> int:
-    """Run one invocation. Returns the process exit code. Every outcome is reported to the hub first.
-
-    The job passes the lease and execution name in its environment. The service passes them as arguments.
-    """
+    """Run one invocation. Returns the process exit code. Every outcome is reported to the hub first."""
     _RUN_START.set(time.monotonic())
-    if lease is None:
-        lease = env.pop("RUN_LEASE", "")  # the lease must not remain in the environment
-    if execution_name is None:
-        execution_name = env.get("CLOUD_RUN_EXECUTION", "")
     if not lease or not execution_name:
         log.error("missing run lease or execution name")
         return 2
@@ -177,7 +166,7 @@ def _report_run(
         try:
             api_key = read_secret(config.project_id, config.anthropic_secret_name)
             _mark("secret_read")
-        except Exception as error:  # a missing secret must fail the run, never run without a key
+        except Exception as error:  # noqa: BLE001 - any failure must fail the run; it never runs without a key
             log.error("secret unavailable: %s", type(error).__name__)
             sequencer.send("failed", code="secret_unavailable", message="The agent's credentials are unavailable.")
             return 1
@@ -264,30 +253,6 @@ def _report_run(
     except HubError as error:
         log.error("hub unreachable while reporting: %s", error.code)
         return 4
-
-
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s", stream=sys.stderr)
-    env = dict(os.environ)
-    os.environ.pop("RUN_LEASE", None)  # the lease must not remain in the process environment
-    try:
-        config = Config.from_env(env)
-    except KeyError as error:
-        log.error("missing configuration: %s", error.args[0])
-        return 2
-
-    from collab_runtime.secrets import read_secret
-
-    runner = ClaudeRunner(timeout_seconds=config.timeout_seconds)
-    signal.signal(signal.SIGTERM, lambda _signum, _frame: runner.terminate())
-    return run(
-        config,
-        env=env,
-        hub=HubClient(config.hub_base_url),
-        read_secret=read_secret,
-        runner=runner,
-        prepare_repo=make_repo_preparer(config, read_secret, httpx.Client(timeout=httpx.Timeout(20.0))),
-    )
 
 
 def make_repo_preparer(

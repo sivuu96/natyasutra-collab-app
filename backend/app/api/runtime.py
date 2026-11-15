@@ -1,4 +1,4 @@
-"""Internal endpoints for agent runtime jobs. Authenticated by the one-use run lease, never by a browser session."""
+"""Internal endpoints for agent runs. Authenticated by the one-use run lease, never by a browser session."""
 
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status

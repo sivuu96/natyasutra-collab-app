@@ -1,4 +1,4 @@
-"""Apply events that a runtime job reports about its run.
+"""Apply events that a runtime reports about its run.
 
 Output is live-only, a reply is persisted as a channel message or a session transcript entry, and completion or
 failure ends the run.

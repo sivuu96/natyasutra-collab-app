@@ -5,7 +5,7 @@ Rules:
   one-use run lease (committed), calls the provider, then records the outcome in a further transaction.
 - Every submit carries the outbox `dedupe_key` as the provider's idempotency key.
 - A claim is a lease. An expired lease can be reclaimed, so a crashed worker cannot strand work.
-- The run lease token is the only credential the job receives. Only its SHA-256 is stored.
+- The run lease token is the only credential the runtime receives. Only its SHA-256 is stored.
 - Failed submits back off and move to `dead` after `max_attempts`; the invocation is then marked failed.
 """
 
@@ -24,7 +24,7 @@ from app.models.agents import AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import ExecutionOutbox, InvocationLease
 
-RUN_LEASE_MINUTES = 10  # how long a job has to exchange its lease after it starts
+RUN_LEASE_MINUTES = 10  # how long a run has to exchange its lease after it starts
 
 
 class ProviderError(Exception):
@@ -39,9 +39,6 @@ class ExecutionProvider(Protocol):
     def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str, lease_token: str) -> str:
         """Start a run. Returns the provider's execution id. Must be idempotent on `dedupe_key`."""
 
-    def cancel(self, provider_execution_id: str) -> None:
-        """Stop a run. Must be safe to call more than once."""
-
 
 @dataclass
 class FakeExecutionProvider:
@@ -50,7 +47,6 @@ class FakeExecutionProvider:
     fail_next: int = 0
     submitted: list[tuple[uuid.UUID, str, str]] = field(default_factory=list)
     lease_tokens: dict[str, str] = field(default_factory=dict)  # execution id -> lease token it was given
-    cancelled: list[str] = field(default_factory=list)
     _by_key: dict[str, str] = field(default_factory=dict)
 
     def submit(self, *, invocation_id: uuid.UUID, dedupe_key: str, lease_token: str) -> str:
@@ -60,17 +56,13 @@ class FakeExecutionProvider:
         # Idempotent: the same key always returns the same execution, as a real provider would.
         if dedupe_key in self._by_key:
             existing = self._by_key[dedupe_key]
-            self.lease_tokens[existing] = lease_token  # the newest lease is the one the job will hold
+            self.lease_tokens[existing] = lease_token  # the newest lease is the one the run will hold
             return existing
         execution_id = f"fake-{uuid.uuid4().hex[:12]}"
         self._by_key[dedupe_key] = execution_id
         self.submitted.append((invocation_id, dedupe_key, execution_id))
         self.lease_tokens[execution_id] = lease_token
         return execution_id
-
-    def cancel(self, provider_execution_id: str) -> None:
-        if provider_execution_id not in self.cancelled:
-            self.cancelled.append(provider_execution_id)
 
 
 def enqueue_dispatch(db: Session, invocation_id: uuid.UUID, *, now: dt.datetime | None = None) -> ExecutionOutbox:
@@ -219,7 +211,6 @@ def process_once(
                     .values(provider_execution_id=execution_id)
                 )
                 row.status = "done"
-                row.provider_execution_id = execution_id
                 row.completed_at = utcnow()
                 row.last_error = None  # the invocation stays queued until the runtime exchanges its lease
             else:

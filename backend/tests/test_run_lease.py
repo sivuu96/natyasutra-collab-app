@@ -1,4 +1,4 @@
-"""Run lease: one-use exchange, execution binding, expiry, revocation, and what the job may see."""
+"""Run lease: one-use exchange, execution binding, expiry, revocation, and what the runtime may see."""
 
 import datetime as dt
 import uuid
@@ -98,7 +98,7 @@ def test_a_mismatched_execution_is_refused_without_burning_the_lease(
 ) -> None:
     run = _start_run(fake_app, fake_client)
 
-    wrong = _exchange(fake_client, run["token"], "projects/x/locations/us-west1/jobs/j/executions/other")
+    wrong = _exchange(fake_client, run["token"], "service/other/execution")
     assert wrong.status_code == 409
     assert wrong.json()["detail"] == "execution_mismatch"
 
@@ -201,20 +201,20 @@ def test_the_runtime_token_is_scoped_to_its_run(fake_app: FastAPI, fake_client: 
     assert claims["sub"] == str(run["invocation_id"])
 
 
-def test_the_short_execution_name_from_the_job_environment_is_accepted(
-    fake_app: FastAPI, fake_client: TestClient
-) -> None:
-    run = _start_run(fake_app, fake_client, handle=f"short{uuid.uuid4().hex[:6]}")
-    full = (
-        "projects/natyasutra-agents/locations/us-west1/jobs/collab-agent-runtime/executions/collab-agent-runtime-n4cl7"
-    )
+def test_only_the_exact_execution_name_is_accepted(fake_app: FastAPI, fake_client: TestClient) -> None:
+    run = _start_run(fake_app, fake_client, handle=f"exact{uuid.uuid4().hex[:6]}")
+    bound = f"service/{run['invocation_id']}/0123abcd"
     with fake_app.state.session_factory() as db:
         db.execute(
             update(InvocationLease)
             .where(InvocationLease.invocation_id == run["invocation_id"])
-            .values(provider_execution_id=full)
+            .values(provider_execution_id=bound)
         )
         db.commit()
 
-    short = "collab-agent-runtime-n4cl7"
-    assert _exchange(fake_client, run["token"], short).status_code == 200
+    partial = _exchange(fake_client, run["token"], "0123abcd")
+    assert partial.status_code == 409
+    assert partial.json()["detail"] == "execution_mismatch"  # a partial name is not the same execution
+    assert _exchange(fake_client, run["token"], bound).status_code == 200  # and the refusal did not use the lease
+
+

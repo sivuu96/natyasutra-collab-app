@@ -1,5 +1,6 @@
 """Warm-instance execution: the dispatch contract to the Cloud Run service (mocked, no Google calls)."""
 
+import base64
 import json
 import uuid
 from typing import Any
@@ -12,7 +13,7 @@ from app.core.config import Settings
 from app.services.execution import ProviderError
 from app.services.providers import build_execution_provider
 from app.services.providers import cloud_run_service as service_module
-from app.services.providers.cloud_run_service import CloudRunServiceProvider
+from app.services.providers.cloud_run_service import CloudRunServiceProvider, load_dispatcher_info
 
 SERVICE_URL = "https://collab-agent-runtime-service-abc.a.run.app"
 
@@ -104,13 +105,6 @@ def test_a_credential_failure_is_raised_so_the_outbox_retries_it() -> None:
         )
 
 
-def test_cancel_sends_nothing() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("no request expected")
-
-    _provider(handler).cancel("service/x/y")
-
-
 def test_the_lease_is_not_logged_when_dispatch_fails(caplog: pytest.LogCaptureFixture) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, json={})
@@ -130,9 +124,16 @@ def test_service_mode_requires_the_key_and_the_service_url() -> None:
         )
 
 
-def test_service_mode_builds_the_service_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    import base64
+def test_malformed_dispatcher_key_is_rejected() -> None:
+    with pytest.raises(ValueError, match="GCP_DISPATCHER_KEY"):
+        load_dispatcher_info("not base64 !!")
+    with pytest.raises(ValueError, match="GCP_DISPATCHER_KEY"):
+        load_dispatcher_info(base64.b64encode(b"{not json").decode())
+    with pytest.raises(ValueError, match="GCP_DISPATCHER_KEY"):
+        load_dispatcher_info(base64.b64encode(b"[1, 2]").decode())
 
+
+def test_service_mode_builds_the_service_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     key = base64.b64encode(json.dumps({"type": "service_account"}).encode()).decode()
     seen: dict[str, Any] = {}
 

@@ -1,18 +1,19 @@
-"""Warm-instance execution provider: the hub asks a Cloud Run service to run each invocation.
+"""Cloud Run service execution provider: the hub asks a warm Cloud Run service to run each invocation.
 
-The service keeps at least one instance warm (min-instances=1), so a run skips the container start that a Cloud Run
-job pays for every run. The service is private: each request carries a Google identity token for the dispatcher
-service account, which has the run.invoker role on the service. Cloud Run rejects any other caller before the
-request reaches the runtime.
+The service keeps at least one instance warm (min-instances=1), so a run does not wait for a container to start.
+The service is private: each request carries a Google identity token for the dispatcher service account, which has
+the run.invoker role on the service. Cloud Run rejects any other caller before the request reaches the runtime.
 
 A run's request stays open for the whole run, which can last up to the runtime's limit. So the hub sends it from a
 background thread and returns at once. A dispatch that cannot reach the service is retried a few times. If every
-attempt fails, the sweeper fails the invocation after START_TIMEOUT, as it does for a job that never starts.
+attempt fails, the sweeper fails the invocation after START_TIMEOUT, as it does for a run that never starts.
 
-Cancel: nothing is sent to the service. The hub marks the invocation cancelled, and the run stops at its next
-heartbeat, which the hub refuses with run_finished.
+Stopping: the hub marks the invocation cancelled, and the run stops at its next heartbeat, which the hub refuses
+with run_finished. Nothing is sent to the service.
 """
 
+import base64
+import json
 import logging
 import time
 import uuid
@@ -33,6 +34,17 @@ DISPATCH_BACKOFF_SECONDS = 2.0
 # The runtime stops a run at 25 minutes. The read timeout must outlast that, because the response comes at the end.
 RUN_READ_TIMEOUT_SECONDS = 30 * 60
 RETRYABLE_STATUS = {408, 429}
+
+
+def load_dispatcher_info(encoded_key: str) -> dict[str, Any]:
+    """Decode the base64 service-account JSON from GCP_DISPATCHER_KEY. Raises ValueError on a malformed key."""
+    try:
+        info = json.loads(base64.b64decode(encoded_key, validate=True))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise ValueError("GCP_DISPATCHER_KEY is not valid base64-encoded service-account JSON") from error
+    if not isinstance(info, dict):
+        raise ValueError("GCP_DISPATCHER_KEY does not hold a service-account key")
+    return info
 
 
 def id_token_source(info: dict[str, Any], audience: str) -> Callable[[], str]:
@@ -83,10 +95,6 @@ class CloudRunServiceProvider:
             self._pool.submit(self._dispatch, invocation_id, payload, headers)
         return execution_name
 
-    def cancel(self, provider_execution_id: str) -> None:
-        """No call is made. The hub has already ended the invocation; the run stops at its next heartbeat."""
-        return None
-
     def _dispatch(self, invocation_id: uuid.UUID, payload: dict[str, str], headers: dict[str, str]) -> bool:
         for attempt in range(1, DISPATCH_ATTEMPTS + 1):
             try:
@@ -109,4 +117,4 @@ class CloudRunServiceProvider:
         return False
 
 
-__all__ = ["CloudRunServiceProvider", "id_token_source"]
+__all__ = ["CloudRunServiceProvider", "id_token_source", "load_dispatcher_info"]

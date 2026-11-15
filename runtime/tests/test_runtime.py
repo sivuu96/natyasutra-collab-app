@@ -1,4 +1,4 @@
-# ruff: noqa: E501  (embedded fake-harness scripts are long string literals)
+
 """Runtime tests: harness parsing, redaction, the subprocess contract, and the full run flow.
 
 The Claude CLI is replaced by a small Python script that speaks the same stream-json format. No test calls
@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 import pytest
-from collab_runtime import main as runtime_main
+
 from collab_runtime.harness import (
     ClaudeRunner,
     build_claude_args,
@@ -90,8 +90,9 @@ def _config(binary: str, timeout: float = 20) -> Config:
     )
 
 
-def _env(lease: str = "lease-secret-value") -> dict[str, str]:
-    return {"RUN_LEASE": lease, "CLOUD_RUN_EXECUTION": "projects/p/locations/us-west1/jobs/j/executions/e1"}
+def _identity(lease: str = "lease-secret-value") -> dict[str, str]:
+    """The lease and execution name a run receives from the service request."""
+    return {"lease": lease, "execution_name": "service/11111111-1111-1111-1111-111111111111/abc123"}
 
 
 # ---- pure functions ---------------------------------------------------------------------------------
@@ -193,10 +194,9 @@ def _split(command: str) -> list[str]:
 
 def test_a_successful_run_reports_started_output_message_and_completed(tmp_path: Path) -> None:
     hub = FakeHub()
-    env = _env()
     code = run(
         _config(_write_fake_harness(tmp_path, SUCCESS_HARNESS)),
-        env=env,
+        **_identity(),
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: API_KEY,
         runner=ClaudeRunner(timeout_seconds=20),
@@ -210,24 +210,12 @@ def test_a_successful_run_reports_started_output_message_and_completed(tmp_path:
     assert all(API_KEY not in str(event) for event in hub.events)
 
 
-def test_the_lease_is_removed_from_the_environment_before_work_starts(tmp_path: Path) -> None:
-    env = _env("lease-value-to-remove")
-    run(
-        _config(_write_fake_harness(tmp_path, SUCCESS_HARNESS)),
-        env=env,
-        hub=FakeHub(),  # type: ignore[arg-type]
-        read_secret=lambda _p, _n: API_KEY,
-        runner=ClaudeRunner(timeout_seconds=20),
-    )
-    assert "RUN_LEASE" not in env
-
-
 def test_a_refused_lease_stops_before_any_work(tmp_path: Path) -> None:
     hub = FakeHub(refuse="lease_expired")
     called: list[str] = []
     code = run(
         _config(_write_fake_harness(tmp_path, SUCCESS_HARNESS)),
-        env=_env(),
+        **_identity(),
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: called.append("read") or API_KEY,
         runner=ClaudeRunner(timeout_seconds=20),
@@ -245,7 +233,7 @@ def test_a_missing_secret_fails_the_run_instead_of_running_without_a_key(tmp_pat
 
     code = run(
         _config(_write_fake_harness(tmp_path, SUCCESS_HARNESS)),
-        env=_env(),
+        **_identity(),
         hub=hub,  # type: ignore[arg-type]
         read_secret=no_secret,
         runner=ClaudeRunner(timeout_seconds=20),
@@ -263,7 +251,7 @@ def test_an_unsupported_harness_is_reported(tmp_path: Path) -> None:
     hub = FakeHub(context={"prompt": "x", "harness": "codex", "runtime_token": "runtime-token"})
     code = run(
         _config(_write_fake_harness(tmp_path, SUCCESS_HARNESS)),
-        env=_env(),
+        **_identity(),
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: API_KEY,
         runner=ClaudeRunner(timeout_seconds=20),
@@ -275,7 +263,8 @@ def test_an_unsupported_harness_is_reported(tmp_path: Path) -> None:
 def test_missing_lease_is_a_configuration_error(tmp_path: Path) -> None:
     code = run(
         _config("claude"),
-        env={"CLOUD_RUN_EXECUTION": "x"},
+        lease="",
+        execution_name="x",
         hub=FakeHub(),  # type: ignore[arg-type]
         read_secret=lambda _p, _n: API_KEY,
         runner=ClaudeRunner(timeout_seconds=20),
@@ -311,11 +300,6 @@ def test_hub_client_stops_retrying_on_a_refusal() -> None:
     assert error.value.code == "run_finished"
 
 
-def test_main_reports_a_missing_configuration_clearly(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("HUB_BASE_URL", raising=False)
-    assert runtime_main.main() == 2
-
-
 SLOW_SUCCESS_HARNESS = """
 import json, time
 time.sleep(0.7)
@@ -345,7 +329,7 @@ def test_heartbeats_and_progress_are_sent_while_the_agent_works(tmp_path: Path) 
     config = Config(**{**config.__dict__, "heartbeat_seconds": 0.05})
     code = run(
         config,
-        env=_env(),
+        **_identity(),
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: API_KEY,
         runner=ClaudeRunner(timeout_seconds=20),
@@ -367,7 +351,7 @@ def test_a_run_cancelled_on_the_hub_stops_the_agent_promptly(tmp_path: Path) -> 
     config = Config(**{**config.__dict__, "heartbeat_seconds": 0.2})
     code = run(
         config,
-        env=_env(),
+        **_identity(),
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: API_KEY,
         runner=ClaudeRunner(timeout_seconds=60),

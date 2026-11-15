@@ -196,7 +196,7 @@ def _set_status(invocation: AgentInvocation, status: InvocationStatus) -> None:
 
 
 def request_cancel(db: Session, invocation: AgentInvocation, actor: User) -> Outcome:
-    """Mark the run cancelled. The outbox worker then asks the provider to stop its execution."""
+    """Mark the run cancelled. The runtime stops at its next heartbeat, when the hub refuses it."""
     outcome = Outcome()
     if invocation.status in {s.value for s in TERMINAL_INVOCATION_STATUSES}:
         return outcome

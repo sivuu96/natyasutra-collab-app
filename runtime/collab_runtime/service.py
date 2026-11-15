@@ -3,7 +3,7 @@
 The hub calls `POST /runs` with a Google identity token (Cloud Run checks that token before the request reaches
 this code) and the lease for one invocation. The request stays open for the whole run and returns when the run
 ends, so the instance counts as busy until then. The service runs at concurrency 1, so a run never shares an
-instance. Each run reports to the hub exactly as a job run does.
+instance. Each run reports to the hub with the same events and checks.
 
 Endpoints:
 - POST /runs with {"execution_name": str, "lease": str} -> 200 {"exit_code": n} when the run ends.
@@ -127,7 +127,6 @@ def serve() -> int:
     def execute(lease: str, execution_name: str) -> int:
         return run(
             config,
-            env={},
             hub=hub,
             read_secret=read_secret,
             runner=ClaudeRunner(timeout_seconds=config.timeout_seconds),

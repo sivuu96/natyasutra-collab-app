@@ -4,7 +4,7 @@ import os
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -29,22 +29,15 @@ class Settings(BaseSettings):
 
     # Signs the short-lived tokens that let an agent run's runtime call the hub. In development an unset secret
     # is generated per process, so tokens stop working on restart. Production refuses to start without it.
-    # RUNTIME_TOKEN_SECRET is the name to use; BRIDGE_TOKEN_SECRET is still read so existing deployments keep working.
-    runtime_token_secret: str | None = Field(
-        default=None, validation_alias=AliasChoices("RUNTIME_TOKEN_SECRET", "BRIDGE_TOKEN_SECRET")
-    )
+    runtime_token_secret: str | None = None
 
     # Where agent runs execute. "fake" runs the outbox with a deterministic in-process provider (tests and local
-    # runs). "cloud_run" starts ephemeral Cloud Run jobs. "cloud_run_service" sends runs to a warm Cloud Run service
-    # (production; see RUNTIME_SERVICE_URL).
-    execution_provider: Literal["fake", "cloud_run", "cloud_run_service"] = "fake"
+    # runs). "cloud_run_service" sends runs to the warm Cloud Run service (production; see RUNTIME_SERVICE_URL).
+    execution_provider: Literal["fake", "cloud_run_service"] = "fake"
     # URL of the private Cloud Run service that runs agent invocations in warm-instance mode.
     runtime_service_url: str | None = None
-    # Public base URL of the hub, given to runtime jobs for their callbacks. Render sets RENDER_EXTERNAL_URL.
+    # Public base URL of the hub, given to runs for their callbacks. Render sets RENDER_EXTERNAL_URL.
     hub_base_url: str | None = None
-    gcp_project_id: str | None = None
-    gcp_region: str = "us-west1"
-    gcp_job_name: str = "collab-agent-runtime"
     # Base64 of the dispatcher service-account JSON key. A secret: never logged or returned by the API.
     gcp_dispatcher_key: SecretStr | None = None
     # Repositories an agent run may clone, as "owner/name". A run for any other repository is refused.
@@ -102,13 +95,6 @@ class Settings(BaseSettings):
                 raise ValueError("GCP_DISPATCHER_KEY is required when EXECUTION_PROVIDER=cloud_run_service")
             if not self.runtime_service_url:
                 raise ValueError("RUNTIME_SERVICE_URL is required when EXECUTION_PROVIDER=cloud_run_service")
-        if self.execution_provider == "cloud_run":
-            if not self.gcp_project_id:
-                raise ValueError("GCP_PROJECT_ID is required when EXECUTION_PROVIDER=cloud_run")
-            if self.gcp_dispatcher_key is None:
-                raise ValueError("GCP_DISPATCHER_KEY is required when EXECUTION_PROVIDER=cloud_run")
-            if not self.hub_base_url:
-                raise ValueError("HUB_BASE_URL (or RENDER_EXTERNAL_URL) is required when EXECUTION_PROVIDER=cloud_run")
         if self.environment == "production":
             if not self.runtime_token_secret or len(self.runtime_token_secret) < 32:
                 raise ValueError("RUNTIME_TOKEN_SECRET must be set (at least 32 characters) in production")

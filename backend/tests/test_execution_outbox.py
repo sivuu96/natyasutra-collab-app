@@ -85,7 +85,6 @@ def test_successful_submit_marks_done_and_leaves_the_run_queued_for_the_runtime(
     assert processed == 1
     row = _outbox_rows(db)[0]
     assert row.status == "done"
-    assert row.provider_execution_id is not None
     assert row.lease_owner is None
     assert len(provider.submitted) == 1
     assert provider.submitted[0][1] == f"dispatch:{invocation_id}"  # dedupe key sent as idempotency key

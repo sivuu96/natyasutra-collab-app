@@ -1,11 +1,10 @@
-"""Stuck-run sweeper, cloud cancel, and progress events."""
+"""Stuck-run sweeper, cancellation, and progress events."""
 
 import datetime as dt
 import uuid
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import API, csrf_headers
 from sqlalchemy import update
 from test_run_lease import _exchange, _start_run
 
@@ -67,20 +66,20 @@ def test_a_queued_run_that_never_started_is_failed_and_never_dispatched(
         db.execute(
             update(ExecutionOutbox)
             .where(ExecutionOutbox.invocation_id == run["invocation_id"])
-            .values(status="pending", provider_execution_id=None)
+            .values(status="pending")
         )
         db.commit()
 
     provider = FakeExecutionProvider()
-    sweep_runs(fake_app.state.session_factory, provider)
+    sweep_runs(fake_app.state.session_factory)
 
     invocation = _invocation(fake_app, run["invocation_id"])
     assert invocation.status == InvocationStatus.FAILED.value
     assert invocation.error_code == "start_timeout"
-    assert provider.submitted == [] and provider.cancelled == []
+    assert provider.submitted == []  # a run that never started is never dispatched now
 
 
-def test_a_silent_running_run_is_failed_and_its_execution_is_stopped_once(
+def test_a_silent_running_run_is_failed(
     fake_app: FastAPI, fake_client: TestClient
 ) -> None:
     run = _start_run(fake_app, fake_client, handle=f"silent{uuid.uuid4().hex[:6]}")
@@ -94,30 +93,10 @@ def test_a_silent_running_run_is_failed_and_its_execution_is_stopped_once(
         )
         db.commit()
 
-    provider = FakeExecutionProvider()
-    sweep_runs(fake_app.state.session_factory, provider)
-    sweep_runs(fake_app.state.session_factory, provider)  # second pass must not stop it again
+    sweep_runs(fake_app.state.session_factory)
 
     invocation = _invocation(fake_app, run["invocation_id"])
     assert invocation.error_code == "heartbeat_lost"
-    assert provider.cancelled == [run["execution_name"]]
-
-
-def test_cancelling_a_cloud_run_marks_it_and_the_worker_stops_its_execution(
-    fake_app: FastAPI, fake_client: TestClient
-) -> None:
-    run = _start_run(fake_app, fake_client, handle=f"cancel{uuid.uuid4().hex[:6]}")
-    invocation = _invocation(fake_app, run["invocation_id"])
-    response = fake_client.post(
-        f"{API}/projects/{invocation.project_id}/invocations/{run['invocation_id']}/cancel",
-        headers=csrf_headers(fake_client),
-    )
-    assert response.status_code == 200, response.text
-    assert _invocation(fake_app, run["invocation_id"]).status == InvocationStatus.CANCELLED.value
-
-    provider = FakeExecutionProvider()
-    sweep_runs(fake_app.state.session_factory, provider)
-    assert provider.cancelled == [run["execution_name"]]
 
 
 def test_progress_is_published_and_counts_as_activity(fake_app: FastAPI, fake_client: TestClient) -> None:
@@ -147,6 +126,5 @@ def test_a_heartbeat_keeps_a_run_alive(fake_app: FastAPI, fake_client: TestClien
     with fake_app.state.session_factory() as db:
         apply_runtime_event(db, run["invocation_id"], RunEventIn(sequence=1, type="heartbeat"))
         db.commit()
-    provider = FakeExecutionProvider()
-    sweep_runs(fake_app.state.session_factory, provider)
+    sweep_runs(fake_app.state.session_factory)
     assert _invocation(fake_app, run["invocation_id"]).status == InvocationStatus.RUNNING.value

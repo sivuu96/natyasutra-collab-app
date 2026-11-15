@@ -1,17 +1,15 @@
 """Stuck-run sweeper for cloud agent runs.
 
-Each pass does two things:
-1. Fails cloud runs that have gone quiet, with a reason the UI can show:
-   - start_timeout: never started (no exchange, no event) within START_TIMEOUT
-   - heartbeat_lost: started, but no heartbeat or event within ACTIVITY_TIMEOUT
-   - timed_out: still open MAX_RUN after creation
-2. Asks the provider to stop the execution of any cancelled or failed run, exactly once. Cloud Run keeps
-   the container alive until it is stopped, so this is what actually ends the work.
+It fails cloud runs that have gone quiet, with a reason the UI can show:
+- start_timeout: never started (no exchange, no event) within START_TIMEOUT
+- heartbeat_lost: started, but no heartbeat or event within ACTIVITY_TIMEOUT
+- timed_out: still open MAX_RUN after creation
+
+Cancelled runs need no sweep: the runtime sees run_finished at its next heartbeat and stops the agent.
 """
 
 import datetime as dt
 import logging
-import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -20,14 +18,12 @@ from app.db.base import utcnow
 from app.models.agents import Agent, AgentInvocation
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import ExecutionOutbox
-from app.services.execution import ExecutionProvider
 
 log = logging.getLogger("collab.sweeper")
 
 START_TIMEOUT = dt.timedelta(minutes=15)
 ACTIVITY_TIMEOUT = dt.timedelta(minutes=5)
 MAX_RUN = dt.timedelta(minutes=40)
-STOP_LOOKBACK = dt.timedelta(hours=2)  # older finished runs are not worth another stop attempt
 
 NONTERMINAL = (
     InvocationStatus.QUEUED.value,
@@ -58,10 +54,8 @@ def stuck_reason(invocation: AgentInvocation, now: dt.datetime) -> str | None:
     return None
 
 
-def sweep_runs(
-    session_factory: sessionmaker[Session], provider: ExecutionProvider, *, now: dt.datetime | None = None
-) -> int:
-    """One pass. Returns the number of runs failed or stopped."""
+def sweep_runs(session_factory: sessionmaker[Session], *, now: dt.datetime | None = None) -> int:
+    """One pass. Returns the number of runs failed."""
     now = now or utcnow()
     failed = 0
     with session_factory() as db:
@@ -87,39 +81,7 @@ def sweep_runs(
             failed += 1
         db.commit()
 
-    for outbox_id, execution_name in _executions_to_stop(session_factory, now):
-        try:
-            provider.cancel(execution_name)
-        except Exception as error:  # retried on the next pass; the message carries no secrets
-            log.warning("stop request failed: %s", type(error).__name__)
-            continue
-        with session_factory() as db:
-            row = db.get(ExecutionOutbox, outbox_id)
-            if row is not None:
-                row.cancel_sent_at = now
-                db.commit()
-        failed += 1
     return failed
-
-
-def _executions_to_stop(session_factory: sessionmaker[Session], now: dt.datetime) -> list[tuple[uuid.UUID, str]]:
-    with session_factory() as db:
-        rows = db.execute(
-            select(ExecutionOutbox.id, ExecutionOutbox.provider_execution_id, AgentInvocation.completed_at)
-            .join(AgentInvocation, AgentInvocation.id == ExecutionOutbox.invocation_id)
-            .where(
-                ExecutionOutbox.provider_execution_id.is_not(None),
-                ExecutionOutbox.cancel_sent_at.is_(None),
-                AgentInvocation.status.in_((InvocationStatus.CANCELLED.value, InvocationStatus.FAILED.value)),
-            )
-            .limit(100)
-        ).all()
-    result: list[tuple[uuid.UUID, str]] = []
-    for outbox_id, execution_name, completed_at in rows:
-        if completed_at is not None and now - _aware(completed_at) > STOP_LOOKBACK:
-            continue
-        result.append((outbox_id, execution_name))
-    return result
 
 
 __all__ = ["MAX_RUN", "START_TIMEOUT", "TERMINAL_INVOCATION_STATUSES", "stuck_reason", "sweep_runs"]

@@ -34,17 +34,14 @@ class ExecutionOutbox(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     next_attempt_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     lease_owner: Mapped[str | None] = mapped_column(String(80), nullable=True)
     lease_expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    provider_execution_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Set once the provider has been asked to stop this run, so the stop is sent exactly once.
-    cancel_sent_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class InvocationLease(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """One-use credential for one run attempt. Only the SHA-256 of the token is stored.
 
-    The job exchanges the token once (see app.services.leases). The exchange marks `used_at`, and a second
+    The runtime exchanges the token once (see app.services.leases). The exchange marks `used_at`, and a second
     exchange fails. Expiry and revocation are checked on every exchange.
     """
 

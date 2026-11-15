@@ -1,6 +1,7 @@
-# Agent runtime image: one invocation per container start. Build from the repository root:
+# Agent runtime image: the warm-instance service that runs agent invocations (`python -m collab_runtime`).
+# Build from the repository root:
 #   docker build -f runtime/Dockerfile -t <image> .
-# No credentials are baked in. The job fetches its secrets from Secret Manager at run time.
+# No credentials are baked in. The runtime fetches its secrets from Secret Manager at run time.
 
 FROM node:22-bookworm-slim
 

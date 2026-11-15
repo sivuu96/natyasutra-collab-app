@@ -2,7 +2,7 @@
 
 Security notes:
 - The API key is given only to the child process environment. It is never written to disk or logged.
-- Output is redacted for the key value and for anything shaped like an Anthropic key before it leaves the job.
+- Output is redacted for the key value and for anything shaped like an Anthropic key before it leaves the runtime.
 - The child gets a minimal environment, an empty working directory, and read-only tools.
 """
 

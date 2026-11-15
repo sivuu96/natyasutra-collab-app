@@ -3,7 +3,7 @@
 No test contacts GitHub. Token requests use a mock transport and clones use a local bare repository.
 """
 
-# ruff: noqa: E501  (embedded fake-harness scripts are long string literals)
+
 
 import base64
 import json
@@ -16,6 +16,10 @@ from typing import Any
 import httpx
 import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from test_runtime import FakeHub, _write_fake_harness
+
 from collab_runtime.github import (
     GitHubError,
     clone_repository,
@@ -25,9 +29,6 @@ from collab_runtime.github import (
 )
 from collab_runtime.harness import ClaudeRunner
 from collab_runtime.main import Config, make_repo_preparer, run
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from test_runtime import FakeHub, _write_fake_harness
 
 
 @pytest.fixture(scope="module")
@@ -223,7 +224,8 @@ def test_the_agent_runs_inside_the_cloned_repository(tmp_path: Path) -> None:
 
     code = run(
         _config(_write_fake_harness(tmp_path, CWD_HARNESS)),
-        env={"RUN_LEASE": "lease", "CLOUD_RUN_EXECUTION": "projects/p/locations/us-west1/jobs/j/executions/e"},
+        lease="lease",
+        execution_name="service/inv/e",
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: "sk-ant-api03-TESTKEY123456",
         runner=ClaudeRunner(timeout_seconds=20),
@@ -252,7 +254,8 @@ def test_a_repository_that_cannot_be_prepared_fails_the_run_without_starting_the
 
     code = run(
         _config(_write_fake_harness(tmp_path, CWD_HARNESS)),
-        env={"RUN_LEASE": "lease", "CLOUD_RUN_EXECUTION": "x"},
+        lease="lease",
+        execution_name="x",
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: "sk-ant-api03-TESTKEY123456",
         runner=ClaudeRunner(timeout_seconds=20),
@@ -274,7 +277,8 @@ def test_a_repository_run_without_repo_access_configured_fails_clearly(tmp_path:
     )
     code = run(
         _config(_write_fake_harness(tmp_path, CWD_HARNESS)),
-        env={"RUN_LEASE": "lease", "CLOUD_RUN_EXECUTION": "x"},
+        lease="lease",
+        execution_name="x",
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: "sk-ant-api03-TESTKEY123456",
         runner=ClaudeRunner(timeout_seconds=20),
@@ -359,7 +363,8 @@ def test_a_run_on_an_empty_repository_completes_and_tells_the_agent(tmp_path: Pa
 
     code = run(
         _config(_write_fake_harness(tmp_path, PROMPT_ECHO_HARNESS)),
-        env={"RUN_LEASE": "lease", "CLOUD_RUN_EXECUTION": "x"},
+        lease="lease",
+        execution_name="x",
         hub=hub,  # type: ignore[arg-type]
         read_secret=lambda _p, _n: "sk-ant-api03-TESTKEY123456",
         runner=ClaudeRunner(timeout_seconds=20),
