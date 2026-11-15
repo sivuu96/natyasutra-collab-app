@@ -41,6 +41,8 @@ Keyboard: arrow keys move through the list, Enter or Tab picks, Escape closes it
 
 ## Agent progress (`discussions/runProgress.ts`)
 
+Files an agent returns appear as download links under its reply (sessions) and in the recent runs list (agents). Each link opens the file as a plain-text attachment.
+
 While an agent works, a progress line appears above the message box: `@claude: Queued…`, then the stage the runtime reports (for example `Preparing the repository…`, `Running the agent…`, `Writing the reply…`). Each line has a Stop button.
 
 - `applyRunEvent(state, event)` turns `agent.invocation.created`, `agent.invocation.progress`, and the final events into the map of active runs. Final events remove the run.

@@ -42,6 +42,7 @@ Ordered by what the team is likely to need first.
 
 ## Deferred
 
+- **Committing files to the repository.** Files an agent returns are kept with the run, and a person downloads them. Pushing them to a branch would need write access for the GitHub App on every run, and a prompt-injected file could then change the repository. If the team wants it, push only to a dedicated branch per run and open a pull request for review.
 - **Resuming a session's CLI conversation on a warm instance.** Not built; the hub keeps sending the transcript, which is correct on any instance. The idea, for when it is worth the complexity:
   - The runtime keeps, per session, a home folder and a clone, and the CLI's own session ID. Follow-ups run `--resume` with only the new message. First turns use `--session-id`.
   - The hub names the previous turn in the exchange. The runtime resumes only if its last successful turn is that one; otherwise it starts from the transcript. A failed turn discards the workspace.

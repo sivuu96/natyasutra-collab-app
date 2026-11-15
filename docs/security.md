@@ -26,6 +26,7 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 
 - **Browser to hub.** Session cookie, CSRF check on writes, project membership on every project route.
 - **Hub to Cloud Run.** The hub signs each run request with the dispatcher account's identity token. Cloud Run accepts only callers holding the `run.invoker` role on the runtime service, so the service is private. The dispatcher account cannot read secrets.
+- **Files returned by the agent.** The agent cannot write files. A file it returns is text, checked by name and size by both the runtime and the hub, and only people who can see its run can download it. Downloads are sent as plain-text attachments with `nosniff`, so the browser never renders them.
 - **Runtime to hub.** The runtime has no account. It holds one lease, exchanges it once, and then uses a 15-minute token for its own invocation.
 - **Runtime to secrets and GitHub.** The runtime's account (`agent-runtime`) can read two named secrets. The GitHub token it creates covers one repository and is read-only.
 

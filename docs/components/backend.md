@@ -54,7 +54,7 @@ Startup checks: `cloud_run_service` requires the dispatcher key and the service 
 | `work.py` | `messages`, `tasks`, `decisions`, `decision_revisions` | Messages can be threaded and edited. |
 | `events.py` | `project_events` | Persisted events with a per-project sequence number. |
 | `audit.py` | `audit_events` | Append-only. Never stores message bodies. |
-| `agents.py` | `agents`, `project_agents`, `agent_invocations` | An agent has a handle, a harness (`claude_code`), a repository and a branch. Attaching is the owner's consent for a project. |
+| `agents.py` | `agents`, `project_agents`, `agent_invocations`, `invocation_files` | An agent has a handle, a harness (`claude_code`), a repository and a branch. Attaching is the owner's consent for a project. |
 | `sessions.py` | `agent_sessions`, `agent_session_messages` | A session is one conversation with one agent. Visibility is `private` or `project`. |
 | `execution.py` | `execution_outbox`, `invocation_leases`, `run_events` | See [Execution](execution.md). |
 | `enums.py` | | Shared enums and check constraints. |
@@ -70,7 +70,7 @@ All routes are under `/api/v1`. Project routes check membership on every request
 | Channels and messages | `GET/POST /projects/{id}/channels`, `GET/POST /projects/{id}/channels/{channel}/messages`, `PATCH`/`DELETE /projects/{id}/messages/{message}` |
 | Tasks and decisions | `GET/POST /projects/{id}/tasks`, `GET/PATCH /projects/{id}/tasks/{task}`, `GET/POST /projects/{id}/decisions`, `GET/PATCH /projects/{id}/decisions/{decision}`, `GET /projects/{id}/decisions/{decision}/revisions` |
 | Activity, audit, search | `GET /projects/{id}/activity`, `GET /projects/{id}/audit`, `GET /projects/{id}/search` |
-| Agents | `GET /me/agents`, `GET/POST /projects/{id}/agents`, `GET /projects/{id}/invocations`, `POST /projects/{id}/invocations/{invocation}/cancel` |
+| Agents | `GET /me/agents`, `GET/POST /projects/{id}/agents`, `GET /projects/{id}/invocations`, `POST /projects/{id}/invocations/{invocation}/cancel`, `GET /projects/{id}/invocations/{invocation}/files/{file}` |
 | Sessions | `GET/POST /projects/{id}/sessions`, `GET /projects/{id}/sessions/{session}`, `GET .../messages`, `POST .../turns`, `POST .../visibility`, `POST .../close` |
 | Live updates | `WS /api/v1/ws/projects/{id}?since=<sequence>` |
 | Runtime (internal) | `POST /api/v1/internal/executions/exchange`, `POST /api/v1/internal/executions/events` |

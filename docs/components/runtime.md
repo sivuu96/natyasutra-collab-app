@@ -58,9 +58,10 @@ The service gets these from its environment. The hub sends the per-run values in
 6. **Run Claude Code** in the clone:
    `claude --allowedTools Read Glob Grep --model <model> -p <prompt> --output-format stream-json --verbose`.
    Only `Read`, `Glob` and `Grep` are allowed. The agent cannot write files, run commands or reach the network through its tools. Its environment contains only the Anthropic key.
-7. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
-8. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
-9. **Delete the temporary directory** and return the response.
+7. **Take files out of the reply.** The agent cannot write files. It returns a file as a block in its reply, `<file name="plan.md">…</file>`, which the runtime reads after the run. Each good file is sent as a `file` event, and the block is removed from the reply. At most five files per reply; refused files are noted in the reply text. Every prompt begins with these instructions.
+8. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
+9. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
+10. **Delete the temporary directory** and return the response.
 
 The runtime sends a heartbeat every 30 seconds while the agent runs. A run that exceeds `RUN_TIMEOUT_SECONDS` is stopped. If the hub cancels the run, the runtime stops Claude Code at its next heartbeat.
 
@@ -93,6 +94,7 @@ Each event goes to `POST /api/v1/internal/executions/events` with the runtime to
 | `progress` | `text` | Shows a stage line above the message box. Not stored. |
 | `heartbeat` | | Keeps the run alive for the sweeper. |
 | `output` | `text` | Streams text to the viewers. Not stored. |
+| `file` | `name`, `content` | Keeps a text file the agent returned. Sent before the reply. Not shown as a message. |
 | `message` | `text` | Saves the reply: a channel message, or a session transcript entry. |
 | `completed` | | Marks the run completed. |
 | `failed` | `code`, `message` | Marks the run failed, with the code and message shown to the user. |
@@ -102,6 +104,7 @@ Rules:
 - `sequence` starts at 0 and counts up by one. The hub stores each sequence number once, so a retried event is recognised and answered with `{"duplicate": true}`.
 - A run that is already finished refuses further events, so a late event cannot change its result.
 - Text is limited to 20,000 characters per event, and failure messages to 500.
+- A file's name may use letters, digits, dots, dashes and underscores, starting with a letter or digit, up to 120 characters. Its content is at most 100 KB.
 - The runtime removes the Anthropic key from memory once the harness has finished, and it redacts the key and `sk-ant-…` patterns from anything it sends.
 
 ## Security

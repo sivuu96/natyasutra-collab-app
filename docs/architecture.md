@@ -83,10 +83,10 @@ PostgreSQL (SQLite in development and tests) holds:
 | Identity | `users` (with `handle`), `auth_sessions`, `teams`, `team_memberships` |
 | Projects | `projects`, `project_memberships`, `channels`, `project_events`, `audit_events` |
 | Work | `messages`, `tasks`, `decisions`, `decision_revisions` |
-| Agents | `agents`, `project_agents`, `agent_invocations`, `agent_sessions`, `agent_session_messages` |
+| Agents | `agents`, `project_agents`, `agent_invocations`, `invocation_files`, `agent_sessions`, `agent_session_messages` |
 | Runs | `execution_outbox`, `invocation_leases`, `run_events` |
 
-Migrations are in `backend/migrations/versions/`. The current head is `b4c5d6e7f8a9`.
+Migrations are in `backend/migrations/versions/`. The current head is `c5d6e7f8a9b0`.
 
 ## 7. Where things run
 
