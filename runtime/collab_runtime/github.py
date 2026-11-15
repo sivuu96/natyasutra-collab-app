@@ -109,31 +109,6 @@ def clone_repository(
     return True
 
 
-def refresh_repository(
-    *,
-    repo_full_name: str,
-    ref: str,
-    token: str,
-    destination: str,
-    base_url: str = GITHUB_WEB,
-    git: str = "git",
-) -> None:
-    """Bring an existing clone up to the latest commit on its branch. Raises GitHubError with a code."""
-    validate_repo(repo_full_name)
-    validate_ref(ref)
-    url = f"{base_url.rstrip('/')}/{repo_full_name}.git"
-    prefix = [git, "-c", "credential.helper=", "-c", "core.askPass="]
-    if token:
-        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-        prefix += ["-c", f"http.extraHeader=Authorization: basic {basic}"]
-    fetched = _git([*prefix, "-C", destination, "fetch", "--depth", "50", url, ref], destination, token)
-    if fetched.returncode != 0:
-        raise GitHubError("fetch_failed", _scrub(fetched.stderr, token))
-    reset = _git([git, "-C", destination, "reset", "--hard", "FETCH_HEAD"], destination, token)
-    if reset.returncode != 0:
-        raise GitHubError("fetch_failed", _scrub(reset.stderr, token))
-
-
 def _git(command: list[str], home: str, token: str) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(

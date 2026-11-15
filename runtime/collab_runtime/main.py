@@ -19,15 +19,9 @@ from typing import Any
 
 import httpx
 
-from collab_runtime.github import (
-    GitHubError,
-    clone_repository,
-    installation_token,
-    refresh_repository,
-)
+from collab_runtime.github import GitHubError, clone_repository, installation_token
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
-from collab_runtime.workspaces import Workspaces
 
 log = logging.getLogger("collab.runtime")
 
@@ -35,7 +29,7 @@ SUPPORTED_HARNESSES = {"claude_code"}
 
 # Timing is logged as milliseconds since the run began. A run starts when the process starts (job) or when the
 # service receives the request (service); each run sets its own start.
-_RUN_START: ContextVar[float] = ContextVar("run_start", default=0.0)
+_RUN_START: ContextVar[float] = ContextVar("run_start", default=time.monotonic())
 
 
 def _mark(stage: str) -> None:
@@ -123,15 +117,13 @@ def run(
     hub: HubClient,
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
-    prepare_repo: Callable[..., bool | None] | None = None,
+    prepare_repo: Callable[[str, str, str], bool | None] | None = None,
     lease: str | None = None,
     execution_name: str | None = None,
-    workspaces: Workspaces | None = None,
 ) -> int:
     """Run one invocation. Returns the process exit code. Every outcome is reported to the hub first.
 
-    The job passes the lease and execution name in its environment. The service passes them as arguments, and
-    also passes `workspaces`, which lets a session's follow-up turns resume the CLI's conversation.
+    The job passes the lease and execution name in its environment. The service passes them as arguments.
     """
     _RUN_START.set(time.monotonic())
     if lease is None:
@@ -160,7 +152,7 @@ def run(
     heartbeat = Heartbeat(sequencer, config.heartbeat_seconds, on_finished=stop_agent)
     heartbeat.start()
     try:
-        return _report_run(config, context, sequencer, hub, read_secret, runner, prepare_repo, finished, workspaces)
+        return _report_run(config, context, sequencer, hub, read_secret, runner, prepare_repo, finished)
     finally:
         heartbeat.stop()
 
@@ -172,9 +164,8 @@ def _report_run(
     hub: HubClient,
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
-    prepare_repo: Callable[..., bool | None] | None,
+    prepare_repo: Callable[[str, str, str], bool | None] | None,
     run_finished: threading.Event,
-    workspaces: Workspaces | None,
 ) -> int:
     """Work the run and report every step. Returns the exit code."""
     try:
@@ -191,192 +182,88 @@ def _report_run(
             sequencer.send("failed", code="secret_unavailable", message="The agent's credentials are unavailable.")
             return 1
 
-        if context.get("session_id") is not None and workspaces is not None:
-            return _session_turn(config, context, sequencer, api_key, runner, prepare_repo, run_finished, workspaces)
-
+        repository = context.get("repository")
+        ref = context.get("ref") or "main"
         with tempfile.TemporaryDirectory(prefix="run-") as workdir:
-            code, _ = _execute(
-                config,
-                context,
-                sequencer,
-                api_key,
-                runner,
-                prepare_repo,
-                run_finished,
+            cwd = workdir
+            if repository:
+                if prepare_repo is None:
+                    sequencer.send("failed", code="repo_unavailable", message="Repository access is not configured.")
+                    return 1
+                repo_dir = os.path.join(workdir, "repo")
+                sequencer.send("progress", text=f"Preparing the repository {repository}")
+                try:
+                    has_files = prepare_repo(repository, ref, repo_dir)
+                    _mark("repo_ready")
+                except GitHubError as error:
+                    # The detail is git's own message, already scrubbed of the token. Logged for operators and
+                    # shortened for the channel, so people can see why a run stopped.
+                    detail = " ".join((error.message or "").split())[:200]
+                    log.error("repository preparation failed: %s %s", error.code, detail)
+                    reason = f": {detail}" if detail else ""
+                    sequencer.send(
+                        "failed",
+                        code=error.code,
+                        message=f"The repository could not be prepared ({error.code}){reason}",
+                    )
+                    return 1
+                if has_files is False:
+                    # An empty repository: there is nothing to read. Say so to the agent, so it answers plainly.
+                    os.makedirs(repo_dir, exist_ok=True)
+                    prompt = (
+                        f"The repository {repository} has no commits yet, so there are no files to read. "
+                        "Tell the user that. Do not invent code or file contents.\n\n" + context["prompt"]
+                    )
+                else:
+                    prompt = context["prompt"]
+                cwd = repo_dir
+            else:
+                prompt = context["prompt"]
+            command = build_claude_args(shlex.split(config.claude_binary), model=config.claude_model, prompt=prompt)
+
+            first_output = [True]
+
+            def emit(text: str) -> None:
+                if run_finished.is_set():
+                    return
+                if first_output[0]:
+                    first_output[0] = False
+                    _mark("first_output")
+                try:
+                    sequencer.send("output", text=text)
+                except HubError as error:
+                    if error.code != "run_finished":
+                        raise
+                    # The run was cancelled or timed out on the hub. Stop the agent; nothing else to report.
+                    run_finished.set()
+                    runner.terminate()
+
+            sequencer.send("progress", text="Running the agent")
+            _mark("agent_started")
+            outcome = runner.run(
+                command=command,
+                api_key=api_key,
                 workdir=workdir,
-                repo_dir=os.path.join(workdir, "repo"),
-                prompt=context["prompt"],
-                conversation=None,
-                refresh=False,
+                cwd=cwd,
+                emit_text=emit,
             )
-        return code
+            _mark("agent_finished")
+        if run_finished.is_set():
+            return 0
+        api_key = ""  # drop the reference as soon as the harness has finished
+
+        if outcome.ok:
+            sequencer.send("progress", text="Writing the reply")
+            if outcome.final_text:
+                sequencer.send("message", text=outcome.final_text)
+            sequencer.send("completed")
+            _mark("completed")
+            return 0
+        sequencer.send("failed", code=outcome.error_code or "runtime_failed", message=outcome.error_message)
+        return 1
     except HubError as error:
         log.error("hub unreachable while reporting: %s", error.code)
         return 4
-
-
-def _session_turn(
-    config: Config,
-    context: dict[str, Any],
-    sequencer: Sequencer,
-    api_key: str,
-    runner: ClaudeRunner,
-    prepare_repo: Callable[..., bool | None] | None,
-    run_finished: threading.Event,
-    workspaces: Workspaces,
-) -> int:
-    """Run one turn of a session on this instance.
-
-    The turn resumes the CLI's own conversation only when this instance holds the previous turn, which the hub
-    names. Otherwise the conversation starts again from the transcript the hub sent. A failed turn discards the
-    workspace, so the next turn starts from the transcript rather than from a half-written conversation.
-    """
-    invocation_id = str(context["invocation_id"])
-    try:
-        session_id = str(context["session_id"])
-        previous = context.get("previous_invocation_id")
-        workspace = workspaces.get(session_id)
-        resume = (
-            workspace is not None
-            and previous is not None
-            and workspace.last_invocation_id == previous
-            and bool(context.get("message"))
-        )
-        if resume:
-            assert workspace is not None
-            prompt = str(context["message"])
-            conversation = (workspace.cli_session_id, True)
-            _mark("resuming_session")
-        else:
-            workspace = workspaces.create(session_id)
-            prompt = context["prompt"]
-            conversation = (workspace.cli_session_id, False)
-            _mark("new_session")
-    except ValueError:
-        sequencer.send("failed", code="bad_session", message="The session identifier was not valid.")
-        return 1
-
-    code, succeeded = _execute(
-        config,
-        context,
-        sequencer,
-        api_key,
-        runner,
-        prepare_repo,
-        run_finished,
-        workdir=workspace.root,
-        repo_dir=workspace.repo,
-        prompt=prompt,
-        conversation=conversation,
-        refresh=resume,
-        home=workspace.home,
-    )
-    if succeeded:
-        workspaces.record_success(session_id, invocation_id)
-    else:
-        workspaces.discard(session_id)
-    return code
-
-
-def _execute(
-    config: Config,
-    context: dict[str, Any],
-    sequencer: Sequencer,
-    api_key: str,
-    runner: ClaudeRunner,
-    prepare_repo: Callable[..., bool | None] | None,
-    run_finished: threading.Event,
-    *,
-    workdir: str,
-    repo_dir: str,
-    prompt: str,
-    conversation: tuple[str, bool] | None,
-    refresh: bool,
-    home: str | None = None,
-) -> tuple[int, bool]:
-    """Prepare the repository, run the agent once, and report the outcome. Returns (exit code, succeeded)."""
-    repository = context.get("repository")
-    ref = context.get("ref") or "main"
-    if repository:
-        if prepare_repo is None:
-            sequencer.send("failed", code="repo_unavailable", message="Repository access is not configured.")
-            return 1, False
-        sequencer.send("progress", text=f"Preparing the repository {repository}")
-        try:
-            if refresh:
-                has_files = prepare_repo(repository, ref, repo_dir, True)
-            else:
-                has_files = prepare_repo(repository, ref, repo_dir)
-            _mark("repo_ready")
-        except GitHubError as error:
-            # The detail is git's own message, already scrubbed of the token. Logged for operators and
-            # shortened for the channel, so people can see why a run stopped.
-            detail = " ".join((error.message or "").split())[:200]
-            log.error("repository preparation failed: %s %s", error.code, detail)
-            reason = f": {detail}" if detail else ""
-            sequencer.send(
-                "failed",
-                code=error.code,
-                message=f"The repository could not be prepared ({error.code}){reason}",
-            )
-            return 1, False
-        if has_files is False:
-            # An empty repository: there is nothing to read. Say so to the agent, so it answers plainly.
-            prompt = (
-                f"The repository {repository} has no commits yet, so there are no files to read. "
-                "Tell the user that. Do not invent code or file contents.\n\n" + prompt
-            )
-    os.makedirs(repo_dir, exist_ok=True)
-
-    session_id, resume = conversation if conversation is not None else (None, False)
-    command = build_claude_args(
-        shlex.split(config.claude_binary),
-        model=config.claude_model,
-        prompt=prompt,
-        session_id=session_id,
-        resume=resume,
-    )
-
-    first_output = [True]
-
-    def emit(text: str) -> None:
-        if run_finished.is_set():
-            return
-        if first_output[0]:
-            first_output[0] = False
-            _mark("first_output")
-        try:
-            sequencer.send("output", text=text)
-        except HubError as error:
-            if error.code != "run_finished":
-                raise
-            # The run was cancelled or timed out on the hub. Stop the agent; nothing else to report.
-            run_finished.set()
-            runner.terminate()
-
-    sequencer.send("progress", text="Running the agent")
-    _mark("agent_started")
-    outcome = runner.run(
-        command=command,
-        api_key=api_key,
-        workdir=home or workdir,
-        cwd=repo_dir,
-        emit_text=emit,
-    )
-    _mark("agent_finished")
-    if run_finished.is_set():
-        return 0, False
-    api_key = ""  # drop the reference as soon as the harness has finished
-
-    if outcome.ok:
-        sequencer.send("progress", text="Writing the reply")
-        if outcome.final_text:
-            sequencer.send("message", text=outcome.final_text)
-        sequencer.send("completed")
-        _mark("completed")
-        return 0, True
-    sequencer.send("failed", code=outcome.error_code or "runtime_failed", message=outcome.error_message)
-    return 1, False
 
 
 def main() -> int:
@@ -405,10 +292,10 @@ def main() -> int:
 
 def make_repo_preparer(
     config: Config, read_secret: Callable[[str, str], str], http: httpx.Client
-) -> Callable[..., bool]:
+) -> Callable[[str, str, str], bool]:
     """Build the function that prepares a repository: read the App key, get a token, clone one branch."""
 
-    def prepare(repository: str, ref: str, destination: str, refresh: bool = False) -> bool:
+    def prepare(repository: str, ref: str, destination: str) -> bool:
         if not config.github_app_id or not config.github_installation_id:
             raise GitHubError("github_not_configured")
         try:
@@ -423,10 +310,6 @@ def make_repo_preparer(
             repo_full_name=repository,
         )
         private_key = ""
-        if refresh and os.path.isdir(os.path.join(destination, ".git")):
-            # A follow-up turn: the clone is already on this instance, so fetch the latest commits into it.
-            refresh_repository(repo_full_name=repository, ref=ref, token=token, destination=destination)
-            return True
         return clone_repository(repo_full_name=repository, ref=ref, token=token, destination=destination)
 
     return prepare

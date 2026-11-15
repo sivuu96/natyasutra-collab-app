@@ -46,27 +46,6 @@ class RunContext:
     runtime_expires_in: int
     repository: str | None = None
     ref: str | None = None
-    # Session turns only. The runtime uses these to continue its own copy of the conversation when it still has
-    # the previous turn. `message` is this turn's text alone; `previous_invocation_id` is the turn before it.
-    session_id: str | None = None
-    message: str | None = None
-    previous_invocation_id: str | None = None
-
-
-def _previous_session_invocation(db: Session, invocation: AgentInvocation) -> uuid.UUID | None:
-    """The turn before this one in the same session, whatever its outcome. None for a mention or a first turn."""
-    if invocation.session_id is None:
-        return None
-    return db.scalar(
-        select(AgentInvocation.id)
-        .where(
-            AgentInvocation.session_id == invocation.session_id,
-            AgentInvocation.id != invocation.id,
-            AgentInvocation.created_at < invocation.created_at,
-        )
-        .order_by(AgentInvocation.created_at.desc())
-        .limit(1)
-    )
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -153,7 +132,6 @@ def exchange_lease(
     invocation.last_activity_at = now
 
     runtime_token, expires_in = issue_runtime_token(runtime_secret, invocation.id, now)
-    previous = _previous_session_invocation(db, invocation)
     context = RunContext(
         invocation_id=invocation.id,
         prompt=session_prompt(db, invocation),
@@ -163,9 +141,6 @@ def exchange_lease(
         runtime_expires_in=expires_in,
         repository=agent.repository_full_name,
         ref=agent.default_ref or ("main" if agent.repository_full_name else None),
-        session_id=str(invocation.session_id) if invocation.session_id else None,
-        message=invocation.prompt if invocation.session_id else None,
-        previous_invocation_id=str(previous) if previous else None,
     )
     db.commit()
     return context

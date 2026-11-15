@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import sys
-import tempfile
 import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,7 +114,6 @@ def serve() -> int:
     from collab_runtime.hub import HubClient
     from collab_runtime.main import Config, make_repo_preparer, run
     from collab_runtime.secrets import read_secret
-    from collab_runtime.workspaces import Workspaces
 
     try:
         config = Config.from_env(dict(os.environ))
@@ -124,8 +122,6 @@ def serve() -> int:
         return 2
 
     hub = HubClient(config.hub_base_url)
-    # Session workspaces live on this instance between turns. WORKSPACE_DIR overrides the default location.
-    workspaces = Workspaces(os.environ.get("WORKSPACE_DIR") or os.path.join(tempfile.gettempdir(), "collab-sessions"))
     prepare_repo = make_repo_preparer(config, read_secret, httpx.Client(timeout=httpx.Timeout(20.0)))
 
     def execute(lease: str, execution_name: str) -> int:
@@ -138,7 +134,6 @@ def serve() -> int:
             prepare_repo=prepare_repo,
             lease=lease,
             execution_name=execution_name,
-            workspaces=workspaces,
         )
 
     port = int(os.environ.get("PORT", "8080"))
