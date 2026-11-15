@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     execution_provider: Literal["fake", "cloud_run_service"] = "fake"
     # URL of the private Cloud Run service that runs agent invocations in warm-instance mode.
     runtime_service_url: str | None = None
+    # Password reset emails, sent through Resend. Without a key, reset requests are refused with a clear message.
+    # The sender address must be on a domain verified with the provider.
+    email_api_key: SecretStr | None = None
+    email_from: str | None = None
+    # Public address of the web app, used in reset links. Render sets RENDER_EXTERNAL_URL.
+    public_app_url: str | None = None
     # Base64 of the dispatcher service-account JSON key. A secret: never logged or returned by the API.
     gcp_dispatcher_key: SecretStr | None = None
     # Repositories an agent run may clone, as "owner/name". A run for any other repository is refused.
@@ -86,6 +92,8 @@ class Settings(BaseSettings):
         external = os.environ.get("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
         if external and external not in self.cors_origins:
             self.cors_origins = [*self.cors_origins, external]
+        if self.public_app_url is None and external:
+            self.public_app_url = external
         if self.execution_provider == "cloud_run_service":
             if self.gcp_dispatcher_key is None:
                 raise ValueError("GCP_DISPATCHER_KEY is required when EXECUTION_PROVIDER=cloud_run_service")

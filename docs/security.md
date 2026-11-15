@@ -49,6 +49,7 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 | A replayed or duplicated event | Each event has a sequence number, stored once. A finished run refuses further events. |
 | Injection through repository content | The agent's tools are read-only. The agent cannot run commands. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
 | Stolen dispatcher key | It can sign requests that run agents, which costs money. Rotate it (see [deployment](deployment.md#5-operating-the-hub)) and keep it only in Render. |
+| A forgotten password | Reset links are random, stored only as a hash, valid for 30 minutes and usable once. A new request cancels older links. The request answer is the same whether or not the account exists. A reset ends every session. |
 | Security headers | Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy, and HSTS in production. |
 
 ## 4. Authentication

@@ -6,7 +6,9 @@ import { ActivityView } from "./pages/ActivityView";
 import { AgentsView } from "./pages/AgentsView";
 import { DecisionsView } from "./pages/DecisionsView";
 import { DiscussionsView } from "./pages/DiscussionsView";
+import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { LoginPage } from "./pages/LoginPage";
+import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { PeopleView } from "./pages/PeopleView";
 import { SessionsView } from "./pages/SessionsView";
 import { ProjectsPage } from "./pages/ProjectsPage";
@@ -72,6 +74,8 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/" element={<ProjectsRoute />} />
           <Route path="/projects/:projectId" element={<WorkspaceRoute />}>
             <Route index element={<Navigate to="discussions" replace />} />

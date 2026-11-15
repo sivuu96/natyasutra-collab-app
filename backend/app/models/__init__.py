@@ -2,7 +2,7 @@
 
 from app.models.agents import Agent, AgentInvocation, ProjectAgent
 from app.models.audit import AuditEvent
-from app.models.auth import AuthSession
+from app.models.auth import AuthSession, PasswordReset
 from app.models.events import ProjectEvent
 from app.models.execution import ExecutionOutbox, InvocationLease, RunEvent
 from app.models.identity import Team, TeamMembership, User
@@ -23,6 +23,7 @@ __all__ = [
     "ExecutionOutbox",
     "InvocationLease",
     "Message",
+    "PasswordReset",
     "Project",
     "ProjectAgent",
     "ProjectEvent",

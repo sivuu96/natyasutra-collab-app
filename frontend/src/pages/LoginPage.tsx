@@ -51,6 +51,9 @@ export function LoginPage() {
           </Button>
         </form>
       </Card>
+      <p className="mt-3 text-center text-sm">
+        <Link to="/forgot-password" className="text-amber-800 underline">Forgot password?</Link>
+      </p>
       <p className="mt-4 text-center text-sm text-stone-600">
         New here? <Link to="/register" className="text-amber-800 underline">Create an account</Link>
       </p>

@@ -26,6 +26,15 @@ class RegisterIn(BaseModel):
     password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=256)
 
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+    password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=256)
+
+
 class LoginIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=256)

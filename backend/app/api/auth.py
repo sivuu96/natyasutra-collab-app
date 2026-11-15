@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.schemas import LoginIn, RegisterIn, UserOut
+from app.api.schemas import ForgotPasswordIn, LoginIn, RegisterIn, ResetPasswordIn, UserOut
 from app.core.security import (
     hash_password,
     hash_token,
@@ -25,6 +25,7 @@ from app.models import AuthSession, User
 from app.models.enums import AuditOutcome
 from app.services.audit import record_audit
 from app.services.handles import allocate_user_handle
+from app.services.password_reset import complete_password_reset, request_password_reset
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -137,6 +138,44 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)) 
     response.delete_cookie(SESSION_COOKIE, path="/")
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+def forgot_password(payload: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)) -> dict[str, str]:
+    """Email a reset link if the account exists. The answer is the same either way."""
+    sender = request.app.state.email_sender
+    public_url = request.app.state.settings.public_app_url
+    if sender is None or not public_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Password reset email is not set up"
+        )
+    enforce_rate_limit(request, f"reset-request:ip:{client_ip(request)}", limit=10, window_seconds=3600)
+    email = payload.email.lower()
+    enforce_rate_limit(request, f"reset-request:email:{email}", limit=3, window_seconds=3600)
+    request_password_reset(
+        db,
+        sender,
+        email=email,
+        public_app_url=public_url,
+        request_id=getattr(request.state, "request_id", None),
+    )
+    return {"detail": "If that account exists, a reset link has been sent."}
+
+
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_password(payload: ResetPasswordIn, request: Request, db: Session = Depends(get_db)) -> Response:
+    """Set a new password with a reset link. Ends every session of the account."""
+    enforce_rate_limit(request, f"reset-complete:ip:{client_ip(request)}", limit=20, window_seconds=3600)
+    if not complete_password_reset(
+        db,
+        token=payload.token,
+        password=payload.password,
+        request_id=getattr(request.state, "request_id", None),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="This reset link is invalid or has expired."
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/me", response_model=UserOut)

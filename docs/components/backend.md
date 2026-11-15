@@ -32,6 +32,9 @@ Settings come from environment variables, or from `backend/.env` in development.
 | `DATABASE_URL` | `sqlite:///./collab_dev.db` | SQLAlchemy URL. Production uses PostgreSQL; `postgres://` URLs are accepted. |
 | `RUNTIME_TOKEN_SECRET` | generated per process | Signs runtime tokens. Required in production (32+ characters). |
 | `EXECUTION_PROVIDER` | `fake` | `fake` for local runs and tests; `cloud_run_service` to send runs to the Cloud Run service. |
+| `EMAIL_API_KEY` | none | Resend API key for password reset emails. A secret. Without it, reset requests get a 503 that says email is not set up. |
+| `EMAIL_FROM` | none | Sender address for reset emails, on a domain verified with Resend. |
+| `PUBLIC_APP_URL` | `RENDER_EXTERNAL_URL` | Address of the web app, used in reset links. |
 | `GCP_DISPATCHER_KEY` | none | Base64 of the dispatcher service-account key JSON. Required with `cloud_run_service`. A secret: never logged or returned. |
 | `RUNTIME_SERVICE_URL` | none | Address of the Cloud Run service that runs agents. Required with `cloud_run_service`. |
 | `GITHUB_ALLOWED_REPOS` | empty | Comma-separated `owner/name` list. A run for any other repository is refused. |
@@ -49,7 +52,7 @@ Startup checks: `cloud_run_service` requires the dispatcher key and the service 
 | Module | Tables | Notes |
 |---|---|---|
 | `identity.py` | `users`, `teams`, `team_memberships` | `users.handle` is unique across people and agents. |
-| `auth.py` | `auth_sessions` | Stores a hash of each session token. |
+| `auth.py` | `auth_sessions`, `password_resets` | Stores a hash of each session token. |
 | `projects.py` | `projects`, `project_memberships`, `channels` | Membership roles: owner, admin, member, viewer. |
 | `work.py` | `messages`, `tasks`, `decisions`, `decision_revisions` | Messages can be threaded and edited. |
 | `events.py` | `project_events` | Persisted events with a per-project sequence number. |
@@ -65,7 +68,7 @@ All routes are under `/api/v1`. Project routes check membership on every request
 
 | Area | Routes |
 |---|---|
-| Auth | `POST /register`, `POST /login`, `POST /logout`, `GET /me` |
+| Auth | `POST /register`, `POST /login`, `POST /logout`, `GET /me`, `POST /forgot-password`, `POST /reset-password` |
 | Teams and projects | `GET/POST /teams`, `POST /teams/{id}/projects`, `GET /projects`, `GET /projects/{id}`, `GET/POST /projects/{id}/members`, `PATCH/DELETE /projects/{id}/members/{user}` |
 | Channels and messages | `GET/POST /projects/{id}/channels`, `GET/POST /projects/{id}/channels/{channel}/messages`, `PATCH`/`DELETE /projects/{id}/messages/{message}` |
 | Tasks and decisions | `GET/POST /projects/{id}/tasks`, `GET/PATCH /projects/{id}/tasks/{task}`, `GET/POST /projects/{id}/decisions`, `GET/PATCH /projects/{id}/decisions/{decision}`, `GET /projects/{id}/decisions/{decision}/revisions` |

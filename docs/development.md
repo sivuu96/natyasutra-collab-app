@@ -90,6 +90,7 @@ Migrations are PostgreSQL-first. Constraint names must be wrapped in `op.f(...)`
 | `a3b4c5d6e7f8` | Drops columns nothing read: agent description, platform admin flag, session last-seen time. Cannot be reversed. |
 | `b4c5d6e7f8a9` | Drops the two outbox columns only the removed job stop step used. Reversible: restores the empty columns. |
 | `c5d6e7f8a9b0` | Files an agent returned in its reply, kept with the run. Reversible: drops the table. |
+| `e7f8a9b0c1d2` | Password reset links: only a hash of each token is stored. Reversible: drops the table. |
 
 The bridge migration was checked on PostgreSQL 16: it refused with a device-backed agent present, ran after that agent was removed, and `alembic check` reported no drift. The latest migration was checked the same way: upgrade, downgrade, upgrade, then `alembic check`, with no drift.
 

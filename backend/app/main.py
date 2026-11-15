@@ -22,6 +22,7 @@ from app.core.ratelimit import RateLimiter
 from app.db.session import make_engine, make_session_factory
 from app.deps import CSRF_COOKIE, CSRF_HEADER
 from app.realtime.hub import hub
+from app.services.email import build_sender
 from app.services.execution_worker import run_outbox_worker
 from app.services.providers import build_execution_provider
 
@@ -80,6 +81,7 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.state.engine = db_engine
     app.state.session_factory = make_session_factory(db_engine)
     app.state.rate_limiter = RateLimiter()
+    app.state.email_sender = build_sender(settings)
     app.state.execution_mode = settings.execution_provider
     app.state.execution_provider = execution_provider
 

@@ -13,6 +13,8 @@ Source: `frontend/src/`. Tests: Vitest with Testing Library and jsdom.
 | `/projects/:id/discussions` | `DiscussionsView` | Channels, messages, the composer, `@` suggestions, agent progress. |
 | `/projects/:id/tasks` | `TasksView` | Tasks: create, change status, assign. |
 | `/projects/:id/decisions` | `DecisionsView` | Decisions with their revisions. |
+| `/forgot-password` | `ForgotPasswordPage` | Asks for an email and sends a reset link. Linked from sign-in. |
+| `/reset-password?token=…` | `ResetPasswordPage` | Sets a new password with a reset link. |
 | `/projects/:id/agents` | `AgentsView` | Agents attached to the project, your agents, and recent runs with Cancel. |
 | `/projects/:id/sessions` | `SessionsView` | Sessions with an agent: transcript, turns, sharing, closing. |
 | `/projects/:id/activity` | `ActivityView` | The project's activity feed. |

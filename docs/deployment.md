@@ -86,6 +86,8 @@ Registration is closed in the deployed configuration (`ALLOW_REGISTRATION=false`
 
 To reopen registration, set `ALLOW_REGISTRATION` to `true` in Render, and set it back to `false` when you're done.
 
+**Password reset email.** People can reset a forgotten password from the sign-in page, which emails a link. This needs a Resend account: verify a domain you control in Resend, create an API key with sending permission, then set `EMAIL_API_KEY` and `EMAIL_FROM` in Render. Until then, the sign-in page's reset form reports that email is not set up. Emails are sent from the hub, and the hub never logs the address or the link.
+
 Forgotten password:
 
 ```sh
@@ -224,6 +226,8 @@ Set these in Render (**Environment**), or in `render.yaml` where marked.
 | `RUNTIME_SERVICE_URL` | Dashboard | The service's address (step 3.8). |
 | `GCP_DISPATCHER_KEY` | Dashboard (secret) | Base64 of the dispatcher key (step 3.6). |
 | `GITHUB_ALLOWED_REPOS` | Dashboard | `owner/name,owner/other`. |
+| `EMAIL_API_KEY` | Dashboard (secret) | Resend API key, for password reset emails (see below). |
+| `EMAIL_FROM` | Dashboard | Sender address on your verified Resend domain, for example `NatyaSutra <no-reply@yourdomain.com>`. |
 | `ALLOW_REGISTRATION` | `render.yaml`: `false` | Sign-up is closed by default. |
 | `LOG_LEVEL` | `render.yaml`: `INFO` | Log level. |
 
