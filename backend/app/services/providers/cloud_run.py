@@ -23,13 +23,20 @@ RUN_API = "https://run.googleapis.com/v2"
 SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
 
-def load_dispatcher_credentials(encoded_key: str) -> Any:
+def load_dispatcher_info(encoded_key: str) -> dict[str, Any]:
     """Decode the base64 service-account JSON. Raises ValueError on a malformed key."""
     try:
         info = json.loads(base64.b64decode(encoded_key, validate=True))
     except (ValueError, json.JSONDecodeError) as error:
         raise ValueError("GCP_DISPATCHER_KEY is not valid base64-encoded service-account JSON") from error
-    return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+    if not isinstance(info, dict):
+        raise ValueError("GCP_DISPATCHER_KEY does not hold a service-account key")
+    return info
+
+
+def load_dispatcher_credentials(encoded_key: str) -> Any:
+    """Credentials for the Cloud Run Admin API (jobs:run and cancel)."""
+    return service_account.Credentials.from_service_account_info(load_dispatcher_info(encoded_key), scopes=SCOPES)
 
 
 class CloudRunJobsProvider:
@@ -99,4 +106,4 @@ class CloudRunJobsProvider:
             raise ProviderError(f"cancel returned HTTP {response.status_code}")
 
 
-__all__ = ["CloudRunJobsProvider", "load_dispatcher_credentials"]
+__all__ = ["CloudRunJobsProvider", "load_dispatcher_credentials", "load_dispatcher_info"]

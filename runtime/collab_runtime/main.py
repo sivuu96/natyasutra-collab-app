@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,12 +27,13 @@ log = logging.getLogger("collab.runtime")
 
 SUPPORTED_HARNESSES = {"claude_code"}
 
-# Timing is logged as milliseconds since this process started, so the job's start-up cost shows up too.
-_PROCESS_START = time.monotonic()
+# Timing is logged as milliseconds since the run began. A run starts when the process starts (job) or when the
+# service receives the request (service); each run sets its own start.
+_RUN_START: ContextVar[float] = ContextVar("run_start", default=time.monotonic())
 
 
 def _mark(stage: str) -> None:
-    log.info("timing stage=%s ms=%d", stage, round((time.monotonic() - _PROCESS_START) * 1000))
+    log.info("timing stage=%s ms=%d", stage, round((time.monotonic() - _RUN_START.get()) * 1000))
 
 
 @dataclass(frozen=True)
@@ -116,10 +118,18 @@ def run(
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
     prepare_repo: Callable[[str, str, str], bool | None] | None = None,
+    lease: str | None = None,
+    execution_name: str | None = None,
 ) -> int:
-    """Run one invocation. Returns the process exit code. Every outcome is reported to the hub first."""
-    lease = env.pop("RUN_LEASE", "")  # the lease must not remain in the environment
-    execution_name = env.get("CLOUD_RUN_EXECUTION", "")
+    """Run one invocation. Returns the process exit code. Every outcome is reported to the hub first.
+
+    The job passes the lease and execution name in its environment. The service passes them as arguments.
+    """
+    _RUN_START.set(time.monotonic())
+    if lease is None:
+        lease = env.pop("RUN_LEASE", "")  # the lease must not remain in the environment
+    if execution_name is None:
+        execution_name = env.get("CLOUD_RUN_EXECUTION", "")
     if not lease or not execution_name:
         log.error("missing run lease or execution name")
         return 2

@@ -35,8 +35,11 @@ class Settings(BaseSettings):
     )
 
     # Where agent runs execute. "fake" runs the outbox with a deterministic in-process provider (tests and local
-    # runs). "cloud_run" starts ephemeral Cloud Run jobs (production).
-    execution_provider: Literal["fake", "cloud_run"] = "fake"
+    # runs). "cloud_run" starts ephemeral Cloud Run jobs. "cloud_run_service" sends runs to a warm Cloud Run service
+    # (production; see RUNTIME_SERVICE_URL).
+    execution_provider: Literal["fake", "cloud_run", "cloud_run_service"] = "fake"
+    # URL of the private Cloud Run service that runs agent invocations in warm-instance mode.
+    runtime_service_url: str | None = None
     # Public base URL of the hub, given to runtime jobs for their callbacks. Render sets RENDER_EXTERNAL_URL.
     hub_base_url: str | None = None
     gcp_project_id: str | None = None
@@ -94,6 +97,11 @@ class Settings(BaseSettings):
             self.cors_origins = [*self.cors_origins, external]
         if self.hub_base_url is None and external:
             self.hub_base_url = external
+        if self.execution_provider == "cloud_run_service":
+            if self.gcp_dispatcher_key is None:
+                raise ValueError("GCP_DISPATCHER_KEY is required when EXECUTION_PROVIDER=cloud_run_service")
+            if not self.runtime_service_url:
+                raise ValueError("RUNTIME_SERVICE_URL is required when EXECUTION_PROVIDER=cloud_run_service")
         if self.execution_provider == "cloud_run":
             if not self.gcp_project_id:
                 raise ValueError("GCP_PROJECT_ID is required when EXECUTION_PROVIDER=cloud_run")
