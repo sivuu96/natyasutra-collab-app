@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.api.schemas import RunFileOut
 from app.db.base import utcnow
 from app.deps import get_current_user, get_db
 from app.models import Agent, AgentInvocation, AgentSession, AgentSessionMessage, ProjectAgent, User
@@ -23,6 +24,7 @@ from app.services.agents import Outcome, apply_outcome, create_session_turn
 from app.services.audit import record_audit
 from app.services.authz import ROLE_RANK, load_project_for
 from app.services.events import record_event
+from app.services.files import files_by_invocation
 
 router = APIRouter(tags=["sessions"])
 
@@ -66,6 +68,7 @@ class SessionMessageOut(BaseModel):
     body: str
     invocation_id: uuid.UUID | None
     created_at: Any
+    files: list[RunFileOut] = []
 
 
 class TurnOut(BaseModel):
@@ -218,6 +221,7 @@ def session_messages(
         ).all()
     )
     rows.reverse()
+    files = files_by_invocation(db, [m.invocation_id for m in rows if m.invocation_id])
     out: list[SessionMessageOut] = []
     for m in rows:
         author = db.get(User, m.author_user_id) if m.author_user_id else None
@@ -231,6 +235,11 @@ def session_messages(
                 body=m.body,
                 invocation_id=m.invocation_id,
                 created_at=m.created_at,
+                files=[
+                    RunFileOut(id=f.id, name=f.name, size_bytes=f.size_bytes) for f in files.get(m.invocation_id, ())
+                ]
+                if m.invocation_id
+                else [],
             )
         )
     return out

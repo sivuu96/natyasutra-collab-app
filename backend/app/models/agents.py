@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -94,3 +95,17 @@ class AgentInvocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
 
 __all__ = ["Agent", "AgentInvocation", "ProjectAgent"]
+
+
+class InvocationFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A text file an agent returned in its reply. It belongs to one run and is readable by whoever can see that run."""
+
+    __tablename__ = "invocation_files"
+    __table_args__ = (UniqueConstraint("invocation_id", "name", name="uq_invocation_files_name"),)
+
+    invocation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("agent_invocations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)

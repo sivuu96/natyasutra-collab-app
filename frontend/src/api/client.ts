@@ -18,6 +18,11 @@ export class ApiError extends Error {
 
 const API_PREFIX = "/api/v1";
 
+/** Address of a file an agent returned. Opened as a download; the server sends it as a plain-text attachment. */
+export function runFileUrl(projectId: string, invocationId: string, fileId: string): string {
+  return `${API_PREFIX}/projects/${projectId}/invocations/${invocationId}/files/${fileId}`;
+}
+
 export function readCsrfToken(cookieString: string = document.cookie): string {
   const match = cookieString.match(/(?:^|;\s*)ns_csrf=([^;]*)/);
   return match ? decodeURIComponent(match[1]) : "";

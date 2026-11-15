@@ -9,24 +9,28 @@ import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.base import utcnow
-from app.models.agents import Agent, AgentInvocation
+from app.models.agents import Agent, AgentInvocation, InvocationFile
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import RunEvent
 from app.models.sessions import AgentSession, AgentSessionMessage
 from app.models.work import Message
 from app.services.agents import _project_envelope, session_scope
+from app.services.files import MAX_FILES_PER_RUN
 
 
 class RunEventIn(BaseModel):
     sequence: int = Field(ge=0, le=1_000_000)
-    type: Literal["started", "progress", "heartbeat", "output", "message", "completed", "failed"]
+    type: Literal["started", "progress", "heartbeat", "output", "message", "file", "completed", "failed"]
     text: str | None = Field(default=None, max_length=20_000)
     code: str | None = Field(default=None, max_length=60)
     message: str | None = Field(default=None, max_length=500)
+    # File events only: a name the runtime has checked, and the whole text of the file.
+    name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
+    content: str | None = Field(default=None, max_length=100_000)
 
 
 class RunEventError(Exception):
@@ -111,6 +115,9 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
                 },
             )
         )
+    elif event.type == "file":
+        _mark_running(invocation)
+        _store_run_file(db, invocation, event.name, event.content)
     elif event.type == "message":
         _mark_running(invocation)
         publish.extend(_persist_reply(db, invocation, agent, event.text or ""))
@@ -225,3 +232,27 @@ def _persist_reply(db: Session, invocation: AgentInvocation, agent: Agent, text:
 
 
 __all__ = ["RunEventError", "RunEventIn", "apply_runtime_event"]
+
+
+def _store_run_file(db: Session, invocation: AgentInvocation, name: str | None, content: str | None) -> None:
+    """Keep a file the agent returned. Incomplete events, repeated names and files past the limit are ignored."""
+    if not name or content is None:
+        return
+    stored = db.scalar(
+        select(func.count()).select_from(InvocationFile).where(InvocationFile.invocation_id == invocation.id)
+    )
+    if (stored or 0) >= MAX_FILES_PER_RUN:
+        return
+    same_name = db.scalar(
+        select(InvocationFile.id).where(InvocationFile.invocation_id == invocation.id, InvocationFile.name == name)
+    )
+    if same_name is not None:
+        return
+    db.add(
+        InvocationFile(
+            invocation_id=invocation.id,
+            name=name,
+            size_bytes=len(content.encode("utf-8")),
+            content=content,
+        )
+    )

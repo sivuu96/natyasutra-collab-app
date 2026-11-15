@@ -6,6 +6,7 @@ import type { Invocation, MyAgent, ProjectAgent } from "../api/types";
 import { Button, Card, EmptyState, ErrorText, formatTime, errorMessage } from "../components/ui";
 import { canAttachAgent, canCancelInvocation, isActive } from "../agents/permissions";
 import { useWorkspace } from "../project/workspaceContext";
+import { RunFiles } from "../components/RunFiles";
 
 const STATUS_STYLE: Record<string, string> = {
   queued: "bg-stone-200 text-stone-800",
@@ -140,6 +141,7 @@ export function AgentsView() {
                         <span className={`rounded px-2 py-0.5 text-xs ${STATUS_STYLE[inv.status] ?? ""}`}>{inv.status}</span>
                       </div>
                       {inv.error_message && <p className="text-xs text-red-700">{inv.error_message}</p>}
+                      <RunFiles projectId={project.id} invocationId={inv.id} files={inv.files} />
                       <div className="flex items-center justify-between text-xs text-stone-500">
                         <span>{formatTime(inv.created_at)}</span>
                         {cancellable && (

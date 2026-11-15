@@ -140,6 +140,12 @@ export interface MyAgent {
 
 type InvocationStatus = "queued" | "accepted" | "running" | "completed" | "failed" | "cancelled";
 
+export interface RunFile {
+  id: string;
+  name: string;
+  size_bytes: number;
+}
+
 export interface Invocation {
   id: string;
   agent_id: string;
@@ -152,6 +158,7 @@ export interface Invocation {
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
+  files: RunFile[];
 }
 
 export interface AgentSession {
@@ -177,6 +184,7 @@ export interface SessionMessage {
   body: string;
   invocation_id: string | null;
   created_at: string;
+  files: RunFile[];
 }
 
 export interface SessionTurn {

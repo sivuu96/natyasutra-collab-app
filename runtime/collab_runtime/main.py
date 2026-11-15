@@ -20,6 +20,7 @@ import httpx
 from collab_runtime.github import GitHubError, clone_repository, installation_token
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
+from collab_runtime.reply_files import INSTRUCTIONS, extract_reply_files
 
 log = logging.getLogger("collab.runtime")
 
@@ -208,7 +209,11 @@ def _report_run(
                 cwd = repo_dir
             else:
                 prompt = context["prompt"]
-            command = build_claude_args(shlex.split(config.claude_binary), model=config.claude_model, prompt=prompt)
+            command = build_claude_args(
+                shlex.split(config.claude_binary),
+                model=config.claude_model,
+                prompt=INSTRUCTIONS + "\n\n" + prompt,
+            )
 
             first_output = [True]
 
@@ -243,8 +248,11 @@ def _report_run(
 
         if outcome.ok:
             sequencer.send("progress", text="Writing the reply")
-            if outcome.final_text:
-                sequencer.send("message", text=outcome.final_text)
+            reply = extract_reply_files(outcome.final_text)
+            for name, content in reply.files:
+                sequencer.send("file", name=name, content=content)
+            if reply.message:
+                sequencer.send("message", text=reply.message)
             sequencer.send("completed")
             _mark("completed")
             return 0

@@ -3,11 +3,12 @@
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.api.schemas import RunFileOut
 from app.deps import get_current_user, get_db
 from app.models import Agent, AgentInvocation, AgentSession, ProjectAgent, User
 from app.models.enums import ProjectRole
@@ -16,6 +17,7 @@ from app.services.agents import apply_outcome, request_cancel
 from app.services.audit import record_audit
 from app.services.authz import ROLE_RANK, load_project_for
 from app.services.events import record_event
+from app.services.files import files_by_invocation, load_run_file
 
 router = APIRouter(tags=["agents"])
 
@@ -53,6 +55,7 @@ class InvocationOut(BaseModel):
     error_message: str | None
     created_at: Any
     completed_at: Any
+    files: list[RunFileOut] = []
 
 
 def _req_id(request: Request) -> str | None:
@@ -73,7 +76,7 @@ def _agent_out(agent: Agent, owner: User) -> ProjectAgentOut:
     )
 
 
-def _invocation_out(invocation: AgentInvocation, agent: Agent) -> InvocationOut:
+def _invocation_out(invocation: AgentInvocation, agent: Agent, files: Any = ()) -> InvocationOut:
     return InvocationOut(
         id=invocation.id,
         agent_id=agent.id,
@@ -86,6 +89,7 @@ def _invocation_out(invocation: AgentInvocation, agent: Agent) -> InvocationOut:
         error_message=invocation.error_message,
         created_at=invocation.created_at,
         completed_at=invocation.completed_at,
+        files=[RunFileOut(id=f.id, name=f.name, size_bytes=f.size_bytes) for f in files],
     )
 
 
@@ -192,7 +196,8 @@ def list_invocations(
         .order_by(AgentInvocation.created_at.desc())
         .limit(limit)
     ).all()
-    return [_invocation_out(i, a) for i, a in rows]
+    files = files_by_invocation(db, [i.id for i, _ in rows])
+    return [_invocation_out(i, a, files.get(i.id, ())) for i, a in rows]
 
 
 @router.post("/projects/{project_id}/invocations/{invocation_id}/cancel", response_model=InvocationOut)
@@ -222,4 +227,25 @@ def cancel_invocation(
     db.refresh(invocation)
     apply_outcome(outcome)
     assert agent is not None
-    return _invocation_out(invocation, agent)
+    return _invocation_out(invocation, agent, files_by_invocation(db, [invocation.id]).get(invocation.id, ()))
+
+
+@router.get("/projects/{project_id}/invocations/{invocation_id}/files/{file_id}")
+def download_run_file(
+    project_id: uuid.UUID,
+    invocation_id: uuid.UUID,
+    file_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """A file an agent returned. Plain text, always an attachment, never rendered by the browser."""
+    stored = load_run_file(db, user, project_id, invocation_id, file_id)
+    return Response(
+        content=stored.content,
+        media_type="text/plain; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored.name}"',
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )

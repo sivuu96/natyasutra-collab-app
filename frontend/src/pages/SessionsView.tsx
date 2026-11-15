@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, ErrorText, formatTime, Input, Label, Select, 
 import { canCancelInvocation, isActive } from "../agents/permissions";
 import { appendDelta, clearInvocation, deltaForSession, type StreamingText } from "../sessions/streaming";
 import { useWorkspace } from "../project/workspaceContext";
+import { RunFiles } from "../components/RunFiles";
 
 export function SessionsView() {
   const { project, role, subscribe, canWrite } = useWorkspace();
@@ -256,6 +257,7 @@ export function SessionsView() {
                     {formatTime(m.created_at)}
                   </p>
                   <p className="whitespace-pre-wrap">{m.body}</p>
+                  <RunFiles projectId={project.id} invocationId={m.invocation_id} files={m.files} />
                 </div>
               ))}
               {streamingForSession.map(([id, text]) => (

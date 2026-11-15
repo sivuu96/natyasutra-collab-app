@@ -207,3 +207,11 @@ class DecisionOut(ORMModel):
     current_revision: int
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class RunFileOut(BaseModel):
+    """A file an agent returned, as listed with its run. The content is fetched separately."""
+
+    id: uuid.UUID
+    name: str
+    size_bytes: int
