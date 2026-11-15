@@ -5,7 +5,7 @@ This page shows how the pieces fit together and how a request flows through them
 - [Backend](components/backend.md): the API, data model and services.
 - [Frontend](components/frontend.md): the web app and its live updates.
 - [Execution](components/execution.md): the run queue, leases, the Cloud Run provider and the sweeper.
-- [Runtime](components/runtime.md): the container that runs an agent.
+- [Runtime](components/runtime.md): the service that runs an agent.
 
 ## 1. Components
 
@@ -15,9 +15,9 @@ This page shows how the pieces fit together and how a request flows through them
     ▼
  Hub (FastAPI, one process on Render)  ── SQL ──▶ PostgreSQL (Supabase)
     │  execution worker (in the hub process)
-    │  jobs:run / cancel (dispatcher service account)
+    │  POST /runs with an identity token (dispatcher service account)
     ▼
- Cloud Run Job: one execution per run  (the runtime container)
+ Cloud Run service, one warm instance, one run at a time  (the runtime)
     │  reads secrets ──▶ Secret Manager (Anthropic key, GitHub App key)
     │  installation token + git clone ──▶ GitHub (read-only)
     │  claude -p (read-only tools) ──▶ Anthropic API
@@ -25,29 +25,29 @@ This page shows how the pieces fit together and how a request flows through them
 ```
 
 - The **hub** serves the API, the built web app and the WebSocket. It owns all state. It is the only component that talks to the database.
-- The **execution worker** runs inside the hub. It starts runs on Cloud Run and asks Cloud Run to stop them.
-- A **run** is one Cloud Run job execution. It starts with one-use credentials, does one piece of work, reports its events to the hub and exits.
-- The **runtime** is the container image. It contains Claude Code, a pinned version, and no credentials of its own.
+- The **execution worker** runs inside the hub. It sends each run to the runtime service.
+- A **run** is one request to the runtime service. It carries a one-use lease, does one piece of work, reports its events to the hub and returns.
+- The **runtime** is the service's container image. It contains Claude Code, a pinned version, and no credentials of its own.
 
 Nothing runs on a team member's machine.
 
 ## 2. A mention becomes a reply
 
 1. A person posts a message with `@claude` in a channel. The hub saves the message, one **invocation** for each attached agent mentioned, and an **outbox** row, all in one transaction. It then broadcasts `message.created` and `agent.invocation.created`.
-2. The worker claims the outbox row. It mints a **run lease**: a random token, stored only as a hash, valid for 10 minutes and usable once. It calls `jobs:run` with the invocation id and the lease in the job's environment. It records the execution name and binds the lease to it.
+2. The worker claims the outbox row. It mints a **run lease**: a random token, stored only as a hash, valid for 10 minutes and usable once. It sends the lease and a new execution name to the runtime service, signed with the dispatcher's identity token. It binds the lease to that execution name.
 3. The run starts. The runtime calls `POST /api/v1/internal/executions/exchange` with the lease and the execution name. The hub checks the lease, marks the lease used, moves the invocation to `accepted`, and returns the prompt, the repository and a **runtime token** (15 minutes, scoped to this invocation).
 4. The runtime reads the Anthropic key from Secret Manager, gets a GitHub installation token for the one repository, clones it read-only, and runs Claude Code with read-only tools.
 5. The runtime sends events to `POST /api/v1/internal/executions/events`: `started`, `progress`, `output`, `message`, `completed`, or `failed`, with a heartbeat every 30 seconds. Each event has a sequence number, and the hub applies each one at most once.
 6. The hub turns events into live updates: progress frames for the progress line, output for the streaming text, and the reply as a channel message. The invocation becomes `completed` or `failed`.
 
-If the agent stops responding, the sweeper fails the run (see [Execution](components/execution.md)). If a person presses Stop, the invocation becomes `cancelled` at once, and the worker asks Cloud Run to stop the execution.
+If the agent stops responding, the sweeper fails the run (see [Execution](components/execution.md)). If a person presses Stop, the invocation becomes `cancelled` at once, and the runtime stops at its next heartbeat.
 
 ## 3. A session turn
 
 A session turn follows the same path with two differences:
 
 - The invocation belongs to a session, not a channel, and its reply goes to the session transcript.
-- The run's prompt includes the session's earlier turns. Cloud runs start in a new container, so the earlier conversation is sent again each time, up to 40 turns and 20,000 characters. The stored invocation keeps only the new message. See [Backend](components/backend.md#sessions) for the details.
+- The run's prompt includes the session's earlier turns. The runtime keeps nothing between runs, so the earlier conversation is sent again each time, up to 40 turns and 20,000 characters. The stored invocation keeps only the new message. See [Backend](components/backend.md#sessions) for the details.
 
 Only one turn may be in progress per session. A second turn is refused until the first finishes.
 
@@ -86,7 +86,7 @@ PostgreSQL (SQLite in development and tests) holds:
 | Agents | `agents`, `project_agents`, `agent_invocations`, `agent_sessions`, `agent_session_messages` |
 | Runs | `execution_outbox`, `invocation_leases`, `run_events` |
 
-Migrations are in `backend/migrations/versions/`. The current head is `a3b4c5d6e7f8`.
+Migrations are in `backend/migrations/versions/`. The current head is `b4c5d6e7f8a9`.
 
 ## 7. Where things run
 
@@ -94,7 +94,7 @@ Migrations are in `backend/migrations/versions/`. The current head is `a3b4c5d6e
 |---|---|
 | Hub (API, web app, WebSocket, worker) | Render web service, one instance |
 | Database | Supabase PostgreSQL |
-| Runtime container | Google Cloud Run Jobs, project `natyasutra-agents`, region `us-west1` |
+| Runtime | Google Cloud Run service `collab-agent-runtime-service`, project `natyasutra-agents`, region `us-west1`. One warm instance, one run at a time. |
 | Runtime image | Artifact Registry, repository `agent-runtime` |
 | Secrets | Google Secret Manager (Anthropic key, GitHub App private key) |
 | Repositories | GitHub, through a GitHub App with read-only contents access |

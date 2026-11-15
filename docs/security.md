@@ -10,24 +10,24 @@ This page covers what the hub protects, who can reach what, the controls in plac
 | Accounts and sessions | Access to projects. |
 | Anthropic API key | Spend, and access to the team's usage. Lives only in Secret Manager. |
 | GitHub App private key | Read access to the allowed repositories. Lives only in Secret Manager. |
-| Dispatcher service-account key | Can start and stop runs. Lives only in Render. |
+| Dispatcher service-account key | Can sign requests that run agents. Lives only in Render. |
 | Runtime lease and runtime token | Let one run call the hub. Each is for one invocation and expires. |
 | Repository contents | Read by agents during a run. Not stored after it. |
 
 ## 2. Trust boundaries
 
 ```
-Browser ──(cookie + CSRF)──▶ Hub ──(bearer lease, then runtime token)──▶ Runtime (Cloud Run)
-                              │                                           │
-                              │ dispatcher key                            │ runtime SA
-                              ▼                                           ▼
-                        Cloud Run API                          Secret Manager, GitHub, Anthropic
+Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; bearer runtime token)──▶ Runtime (Cloud Run service)
+                              │                                                          │
+                              │ dispatcher key                                           │ runtime SA
+                              ▼                                                          ▼
+                        signs the identity token                       Secret Manager, GitHub, Anthropic
 ```
 
 - **Browser to hub.** Session cookie, CSRF check on writes, project membership on every project route.
-- **Hub to Cloud Run.** The dispatcher account starts and stops executions. It cannot read secrets.
+- **Hub to Cloud Run.** The hub signs each run request with the dispatcher account's identity token. Cloud Run accepts only callers holding the `run.invoker` role on the runtime service, so the service is private. The dispatcher account cannot read secrets.
 - **Runtime to hub.** The runtime has no account. It holds one lease, exchanges it once, and then uses a 15-minute token for its own invocation.
-- **Runtime to secrets and GitHub.** The job's account can read two named secrets. The GitHub token it creates covers one repository and is read-only.
+- **Runtime to secrets and GitHub.** The runtime's account (`agent-runtime`) can read two named secrets. The GitHub token it creates covers one repository and is read-only.
 
 ## 3. Threats and controls
 
@@ -47,7 +47,7 @@ Browser ──(cookie + CSRF)──▶ Hub ──(bearer lease, then runtime tok
 | A runaway agent | Runtime timeout of 25 minutes; the sweeper fails a run after 40 minutes at most, and fails silent runs after 5 minutes. A person can stop a run. |
 | A replayed or duplicated event | Each event has a sequence number, stored once. A finished run refuses further events. |
 | Injection through repository content | The agent's tools are read-only. The agent cannot run commands. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
-| Stolen dispatcher key | It can start and stop runs, which costs money. Rotate it (see [deployment](deployment.md#5-operating-the-hub)) and keep it only in Render. |
+| Stolen dispatcher key | It can sign requests that run agents, which costs money. Rotate it (see [deployment](deployment.md#5-operating-the-hub)) and keep it only in Render. |
 | Security headers | Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy, and HSTS in production. |
 
 ## 4. Authentication
@@ -101,9 +101,9 @@ The Supabase Data API must stay closed (see [deployment](deployment.md#database-
 These are known and accepted for a small trusted team. Each must be addressed before the hub is used by people outside the team or at larger scale.
 
 - **One instance.** The rate limiter, realtime fan-out and execution worker are in-process. Scaling out needs a shared rate-limit store, a message bus for realtime events, and a single leader for the worker.
-- **Provider starts are not idempotent.** `jobs:run` has no idempotency key. The lease makes a duplicate execution harmless, but it is still started. See [execution](components/execution.md#cloud-run-provider).
+- **Dispatch retries.** A run request that reaches the service after a lost response is refused as a duplicate (`409`), because the service remembers which executions are running. A lease that is used a second time is refused as well. See [execution](components/execution.md#cloud-run-service-provider).
 - **Long-lived dispatcher key.** The hub holds a service-account key. Workload identity would remove the key; this needs a platform change.
-- **No outbound network controls on runs.** The job can reach any host, so the agent could in principle send data to a site it finds. Restrict the job's network with egress controls before running untrusted repositories.
+- **No outbound network controls on runs.** The runtime service can reach any host, so the agent could in principle send data to a site it finds. Restrict the service's network with egress controls before running untrusted repositories.
 - **Prompt injection.** The agent reads repository text and replies to people. A document can try to change the agent's behaviour or its answer. Read-only tools limit the damage, but the agent's replies should be treated as suggestions, not verified facts.
 - **No review of agent replies.** Replies are not checked before they are shown. Anyone reading a reply should check claims that matter.
 - **Free-plan hosting.** Render and Supabase free plans sleep or pause and have no automatic backups. See [deployment](deployment.md#known-limits).

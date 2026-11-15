@@ -20,7 +20,7 @@ Start with the [architecture overview](docs/architecture.md), then the component
 Operating the hub:
 
 - [Development](docs/development.md): set up and test locally.
-- [Deployment](docs/deployment.md): Render, Supabase, and Google Cloud Run Jobs.
+- [Deployment](docs/deployment.md): Render, Supabase, and the Google Cloud Run service.
 - [Security](docs/security.md): trust boundaries, controls, and known limits.
 
 ## Status

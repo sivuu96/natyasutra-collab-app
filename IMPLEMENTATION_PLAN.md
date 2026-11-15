@@ -9,7 +9,7 @@ This page records what is built, the decisions behind it, and what comes next. T
 | Accounts, teams, projects, membership and roles | Done |
 | Channels, messages (threads, edit, delete), live updates with replay | Done |
 | Tasks, decisions with revisions, activity feed, audit log, search | Done |
-| Cloud agents: mention and session runs on Cloud Run Jobs | Done |
+| Cloud agents: mention and session runs on a Cloud Run service | Done |
 | Run reliability: one-use leases, retries, cancel, stuck-run sweeper | Done |
 | Progress above the message box while a run works | Done |
 | `@` suggestions for agents and people | Done (suggestions only; no notifications) |
@@ -22,7 +22,7 @@ This page records what is built, the decisions behind it, and what comes next. T
 | Decision | Reason |
 |---|---|
 | Hub on Render, one instance; database on Supabase in us-west-2 | Free plans, no team member installs anything. One instance keeps the in-process worker and realtime simple. |
-| Agent runs on Cloud Run Jobs, one execution per run | No always-on agent process. Each run starts with nothing and exits. |
+| Agent runs on a Cloud Run service, one warm instance, one run at a time | The warm instance removes the container start. Each run still starts with nothing: a new clone and a new Claude Code process. |
 | Anthropic team API key in Secret Manager | Usage belongs to the team, not a person. |
 | GitHub App with read-only contents access, one repository per run | Agents read repositories; they never write. The App key lives in Secret Manager. |
 | Read-only tools for the agent (`Read`, `Glob`, `Grep`) | Limits what a run can do, including what injected text can make it do. |
@@ -35,8 +35,8 @@ This page records what is built, the decisions behind it, and what comes next. T
 Ordered by what the team is likely to need first.
 
 1. **Mention notifications.** Members can be suggested with `@`, but they are not notified. Decide the channel (in-app, email) before building it.
-2. **Session memory.** If sessions outgrow the replay cap, consider Cloud Run services so the Claude session survives between messages. See [execution](docs/components/execution.md#services-instead-of-jobs-possible-next-step).
-3. **Egress controls for runs.** Runs can reach any host. Restrict the job's network before running untrusted repositories.
+2. **Session memory.** If sessions outgrow the replay cap, resume the Claude Code conversation on the warm instance. See Deferred above.
+3. **Egress controls for runs.** Runs can reach any host. Restrict the service's network before running untrusted repositories.
 4. **Usage visibility.** Show the team how many runs and tokens each agent uses, so the shared key's spend is visible.
 5. **Scaling the hub.** Only needed if the team grows: a shared rate-limit store, a message bus for realtime events, and a leader election for the worker.
 
@@ -54,6 +54,6 @@ Ordered by what the team is likely to need first.
 
 ## Open items
 
-- Rename the `BRIDGE_TOKEN_SECRET` variable in deployments that still use it. The hub reads both names; the old one can be removed once Render has `RUNTIME_TOKEN_SECRET`.
+- Before the next hub deploy, confirm Render has `RUNTIME_TOKEN_SECRET` set. The hub no longer reads the old `BRIDGE_TOKEN_SECRET` name, and in production it refuses to start without the new one.
 - Decide whether `deploy/.env` (local Compose) should keep its old variable name. It must define `RUNTIME_TOKEN_SECRET` to start.
-- Confirm the Cloud Run job's `--max-retries 0` and task timeout after each job update (see [deployment](docs/deployment.md#35-the-job)).
+- Confirm the service's minimum instances, concurrency and maximum instances after each update (see [deployment](docs/deployment.md#35-the-service)).

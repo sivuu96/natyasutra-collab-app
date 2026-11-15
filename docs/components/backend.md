@@ -16,9 +16,9 @@ Source: `backend/`. Entry point: `app.main:create_app` (a factory, so tests and 
 | `app/models/` | ORM models, grouped by area (see below). |
 | `app/api/` | Routers. One module per area. |
 | `app/services/` | Business logic that the routers call: agents, execution, leases, runtime events, sweeper, transcript, and so on. |
-| `app/services/providers/` | Execution providers: the in-process fake and Cloud Run Jobs. |
+| `app/services/providers/` | Execution providers: the in-process fake and the Cloud Run service provider. |
 | `app/realtime/hub.py` | In-process fan-out of committed events to WebSocket subscribers. |
-| `migrations/` | Alembic migrations. The chain runs from `b38873a6b2ce` to `a3b4c5d6e7f8`. |
+| `migrations/` | Alembic migrations. The chain runs from `b38873a6b2ce` to `b4c5d6e7f8a9`. |
 | `scripts/` | Operator commands (below). |
 | `tests/` | pytest suite. Runs on SQLite; PostgreSQL integration tests run when `TEST_DATABASE_URL` is set. |
 
@@ -30,13 +30,10 @@ Settings come from environment variables, or from `backend/.env` in development.
 |---|---|---|
 | `ENVIRONMENT` | `development` | `production` turns on secure cookies, HSTS and stricter checks. |
 | `DATABASE_URL` | `sqlite:///./collab_dev.db` | SQLAlchemy URL. Production uses PostgreSQL; `postgres://` URLs are accepted. |
-| `RUNTIME_TOKEN_SECRET` | generated per process | Signs runtime tokens. Required in production (32+ characters). `BRIDGE_TOKEN_SECRET` is still read so older deployments keep working. |
-| `EXECUTION_PROVIDER` | `fake` | `fake` for local runs and tests; `cloud_run` to start real Cloud Run Jobs. |
-| `HUB_BASE_URL` | `RENDER_EXTERNAL_URL` | Public address of the hub, given to runs for their callbacks. |
-| `GCP_PROJECT_ID` | none | Required with `cloud_run`. |
-| `GCP_REGION` | `us-west1` | Region of the job. |
-| `GCP_JOB_NAME` | `collab-agent-runtime` | Name of the Cloud Run job. |
-| `GCP_DISPATCHER_KEY` | none | Base64 of the dispatcher service-account key JSON. Required with `cloud_run`. A secret: never logged or returned. |
+| `RUNTIME_TOKEN_SECRET` | generated per process | Signs runtime tokens. Required in production (32+ characters). |
+| `EXECUTION_PROVIDER` | `fake` | `fake` for local runs and tests; `cloud_run_service` to send runs to the Cloud Run service. |
+| `GCP_DISPATCHER_KEY` | none | Base64 of the dispatcher service-account key JSON. Required with `cloud_run_service`. A secret: never logged or returned. |
+| `RUNTIME_SERVICE_URL` | none | Address of the Cloud Run service that runs agents. Required with `cloud_run_service`. |
 | `GITHUB_ALLOWED_REPOS` | empty | Comma-separated `owner/name` list. A run for any other repository is refused. |
 | `EXECUTION_WORKER_ENABLED` | `true` | Runs the outbox worker in this process. |
 | `EXECUTION_WORKER_INTERVAL_SECONDS` | `5` | How often the worker and sweeper run. |
@@ -45,7 +42,7 @@ Settings come from environment variables, or from `backend/.env` in development.
 | `FRONTEND_DIST` | none | Folder with the built web app; the API serves it when set. |
 | `LOG_LEVEL` | `INFO` | Log level. Logs are JSON; they never contain message bodies or credentials. |
 
-Startup checks: `cloud_run` requires the project, the dispatcher key and a hub address. Production requires a runtime token secret and PostgreSQL.
+Startup checks: `cloud_run_service` requires the dispatcher key and the service address. Production requires a runtime token secret and PostgreSQL.
 
 ## Models
 
@@ -91,14 +88,14 @@ Every project route calls `load_project_for` (`app/services/authz.py`), which ch
 
 - `create_invocations_for_message` runs inside the message transaction. For each mention of an attached agent, it creates an invocation in `queued` state and an outbox row.
 - `create_session_turn` does the same for a session turn. It refuses a turn for a revoked agent.
-- `request_cancel` marks the invocation cancelled. The worker then stops the execution.
+- `request_cancel` marks the invocation cancelled. The runtime stops at its next heartbeat.
 - `apply_outcome` broadcasts events after the commit.
 
 ### Sessions
 
 A session's turns run one at a time. The turn route checks for an active invocation in the session before it creates one.
 
-Each run carries the session's earlier turns, because a cloud run starts in a new container and cannot resume a previous Claude session. `services/transcript.py` builds that prompt when the run's lease is exchanged:
+Each run carries the session's earlier turns, because the runtime keeps nothing between runs and cannot resume a previous Claude session. `services/transcript.py` builds that prompt when the run's lease is exchanged:
 
 - The newest transcript row is this turn's own message. It is left out of the history and sent last, as the new message.
 - The history is limited to 40 rows and 20,000 characters. Each reply is shortened to 4,000 characters, and the oldest turns are dropped first.

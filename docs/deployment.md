@@ -4,10 +4,10 @@ The production hub is three hosted pieces, plus the runtime image that agent run
 
 | Piece | Where | What it does |
 |---|---|---|
-| Hub: API, web app, WebSocket, worker | Render web service, from `deploy/Dockerfile` | Serves everything, runs migrations on start, starts agent runs. |
+| Hub: API, web app, WebSocket, worker | Render web service, from `deploy/Dockerfile` | Serves everything, runs migrations on start, sends agent runs to the runtime. |
 | Database | Supabase PostgreSQL | All state. |
-| Agent runs | Google Cloud Run Jobs, project `natyasutra-agents`, region `us-west1` | One container per run, from the runtime image. |
-| Runtime image | Artifact Registry, repository `agent-runtime` | The image the job runs. |
+| Agent runs | Google Cloud Run service `collab-agent-runtime-service`, project `natyasutra-agents`, region `us-west1` | Runs one agent invocation at a time, from the runtime image. One warm instance is kept running. |
+| Runtime image | Artifact Registry, repository `agent-runtime` | The image the service runs. |
 | Secrets | Google Secret Manager | Anthropic API key and GitHub App private key. |
 
 Serving the UI from the same address as the API keeps sign-in and live updates simple: no cross-origin cookies. TLS certificates are automatic on Render. Secure cookies are on by default in production.
@@ -20,7 +20,7 @@ Render's free plan and Supabase's free plan cost nothing, but they have limits t
 
 - **Render web service (free):** spins down after 15 minutes without inbound traffic. Waking it takes about a minute. The disk is temporary; the hub keeps everything in PostgreSQL, so that is safe. Monthly free instance hours are limited, and one always-on instance uses most of them. Check Render's current plan limits before relying on them.
 - **Supabase (free):** projects **pause after a week of inactivity**. Data is kept, but the hub is down until someone restores the project in the dashboard. Storage is capped, and there are **no automatic backups** (see "Backups" below).
-- **Google Cloud:** agent runs are billed by run time, and the image and secrets have small storage charges. Check GCP's pricing for your region and set a budget alert on the project.
+- **Google Cloud:** the agent service keeps one instance running all the time (`min-instances=1`), which is billed at Cloud Run's idle rate, plus the run time of each agent run. The image and secrets have small storage charges. Check GCP's pricing for your region and set a budget alert on the project. If the always-on instance costs more than the speed it buys, set `--min-instances 0`: runs then start a new instance, and the first message after a quiet period is slower.
 
 Plan limits change. Check the Render, Supabase and Google Cloud pricing pages before you rely on them.
 
@@ -64,7 +64,7 @@ The hub connects as `postgres`, which keeps access. Confirm that `set role anon;
 ## 1. Deploy the hub on Render
 
 1. In Render, choose **New > Blueprint** and select this repository. Render reads `render.yaml`.
-2. Set the variables marked "set in the dashboard" (see the configuration reference below). At least `DATABASE_URL` and the Google Cloud settings.
+2. Set the variables marked "set in the dashboard" (see the configuration reference below). At least `DATABASE_URL`, `GCP_DISPATCHER_KEY`, `RUNTIME_SERVICE_URL` and `GITHUB_ALLOWED_REPOS`.
 3. Deploy. Migrations run before the server starts. If a migration fails, the new version does not start, and Render keeps the previous version serving. Check the deploy logs.
 4. Open `https://<service>.onrender.com/health` (should say `ok`) and `/ready` (should say the database is up).
 
@@ -115,7 +115,7 @@ docker build -f runtime/Dockerfile -t us-west1-docker.pkg.dev/<project>/agent-ru
 docker push us-west1-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime:<tag>
 ```
 
-Build from the repository root. Note the image **digest** that `docker push` prints (`sha256:...`). Use the digest when you create or update the job, so the job runs exactly the image you tested. A placeholder digest in the job command will fail.
+Build from the repository root. Note the image **digest** that `docker push` prints (`sha256:...`). Use the digest when you create or update the service, so it runs exactly the image you tested. A placeholder digest in the command will fail.
 
 ### 3.3 Secrets
 
@@ -134,30 +134,48 @@ Two service accounts, each with the least access it needs:
 
 | Account | Roles | Used by |
 |---|---|---|
-| `agent-runtime` | `roles/logging.logWriter`; `roles/secretmanager.secretAccessor` on **only** `anthropic-api-key` and `github-app-key` | The running job |
-| `agent-dispatcher` | `roles/run.developer` on the job; `roles/iam.serviceAccountUser` on `agent-runtime` | The hub, to start and stop runs |
+| `agent-runtime` | `roles/logging.logWriter`; `roles/secretmanager.secretAccessor` on **only** `anthropic-api-key` and `github-app-key` | The running service. It runs as this account. |
+| `agent-dispatcher` | `roles/run.invoker` on the service, and nothing else | The hub, to send each run to the service. |
+
+The person who deploys the service needs `roles/run.admin` and `roles/iam.serviceAccountUser` on `agent-runtime`, to attach that account to the service.
 
 The default compute service account should have no roles on this project.
 
-### 3.5 The job
+### 3.5 The service
 
-Create the job with the runtime account, the pinned image digest, and the settings below. The task timeout must be longer than the runtime's own limit (25 minutes), and retries must be off, because a retried run would start from a lease that is already used.
+Create the service with the runtime account, the pinned image digest, and the settings below. Keep the settings as they are: concurrency 1 is what keeps one run from sharing a clone or a process with another.
 
 ```sh
-gcloud run jobs create collab-agent-runtime \
-  --region us-west1 \
-  --image us-west1-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime@sha256:<digest> \
-  --service-account agent-runtime@<project>.iam.gserviceaccount.com \
-  --task-timeout 1800s \
-  --max-retries 0 \
-  --set-env-vars GCP_PROJECT_ID=<project>,GITHUB_APP_ID=<app-id>,GITHUB_INSTALLATION_ID=<installation-id>
+gcloud run deploy collab-agent-runtime-service --region us-west1 --image us-west1-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime@sha256:<digest> --service-account agent-runtime@<project>.iam.gserviceaccount.com --no-allow-unauthenticated --min-instances 1 --max-instances 3 --concurrency 1 --cpu 1 --memory 2Gi --timeout 1800 --set-env-vars "HUB_BASE_URL=https://<hub>.onrender.com,GCP_PROJECT_ID=<project>,GITHUB_APP_ID=<app-id>,GITHUB_INSTALLATION_ID=<installation-id>"
 ```
 
-Check these flags against your installed `gcloud` version (`gcloud run jobs create --help`). Update the image later with `gcloud run jobs update ... --image <...>@sha256:<new-digest>`.
+- `--no-allow-unauthenticated` keeps the service private. Only the dispatcher account can call it.
+- `--set-env-vars` takes commas and no spaces. A space where a comma belongs joins two settings into one, and the service then fails every run.
+- `--timeout 1800` is longer than the runtime's 25-minute limit.
+- `--max-instances 3` caps simultaneous runs at three. A fourth simultaneous run waits for an instance to free up, and fails if none does in time.
+- Check the flags against your installed `gcloud` version (`gcloud run deploy --help`).
+
+Give the dispatcher account permission to call the service:
+
+```sh
+gcloud run services add-iam-policy-binding collab-agent-runtime-service --region us-west1 --member serviceAccount:agent-dispatcher@<project>.iam.gserviceaccount.com --role roles/run.invoker
+```
+
+Get the service's address, which goes in `RUNTIME_SERVICE_URL` (step 3.8 and section 4):
+
+```sh
+gcloud run services describe collab-agent-runtime-service --region us-west1 --format "value(status.url)"
+```
+
+Check the service's environment after deploying, to confirm each setting is separate:
+
+```sh
+gcloud run services describe collab-agent-runtime-service --region us-west1 --format "yaml(spec.template.spec.containers[0].env)"
+```
 
 ### 3.6 The dispatcher key
 
-The hub needs a key for `agent-dispatcher` to start runs.
+The hub needs a key for `agent-dispatcher` to call the service. The hub uses it to sign a short-lived identity token for each run. The key itself is never sent.
 
 1. Create a key for `agent-dispatcher` and download the JSON file.
 2. Encode it on one line, for example with `base64 -w0 key.json` on Linux, or in PowerShell `[Convert]::ToBase64String([IO.File]::ReadAllBytes("key.json"))`.
@@ -168,19 +186,28 @@ If your organisation blocks key creation (the `iam.disableServiceAccountKeyCreat
 
 ### 3.7 GitHub App
 
-Create a GitHub App with **Repository permissions: Contents, read-only**, and no other permissions. Install it only on the repositories agents should read. Note the App ID and the installation ID, set them on the job (step 3.5), and store the private key as `github-app-key` (step 3.3).
+Create a GitHub App with **Repository permissions: Contents, read-only**, and no other permissions. Install it only on the repositories agents should read. Note the App ID and the installation ID, set them on the service (step 3.5), and store the private key as `github-app-key` (step 3.3).
 
 Then set `GITHUB_ALLOWED_REPOS` in Render to the same repositories, as `owner/name` separated by commas. The hub refuses a run for any other repository.
 
-### 3.8 Create an agent
+### 3.8 Connect the hub to the service
+
+In Render (**Environment**), set:
+
+| Variable | Value |
+|---|---|
+| `EXECUTION_PROVIDER` | `cloud_run_service` |
+| `RUNTIME_SERVICE_URL` | The address from step 3.5, with no trailing slash. |
+
+Render redeploys. Until both are set, the hub will not start.
+
+### 3.9 Create an agent
 
 An operator creates an agent for a project owner or admin. The owner must already be a member of the project.
 
 ```sh
-python -m scripts.create_cloud_agent --email owner@example.com --handle claude \
-  --project-slug <project-slug> --repo owner/name --ref main --dry-run
-python -m scripts.create_cloud_agent --email owner@example.com --handle claude \
-  --project-slug <project-slug> --repo owner/name --ref main
+python -m scripts.create_cloud_agent --email owner@example.com --handle claude --project-slug <project-slug> --repo owner/name --ref main --dry-run
+python -m scripts.create_cloud_agent --email owner@example.com --handle claude --project-slug <project-slug> --repo owner/name --ref main
 ```
 
 Run it from the Render shell. The first command checks everything and writes nothing. The second creates the agent and attaches it to the project. The owner can then mention `@claude` in a channel or start a session with it.
@@ -192,26 +219,35 @@ Set these in Render (**Environment**), or in `render.yaml` where marked.
 | Variable | Where | Value |
 |---|---|---|
 | `DATABASE_URL` | Dashboard (secret) | Supabase Session pooler URL. |
-| `RUNTIME_TOKEN_SECRET` | Generated by `render.yaml` | Signs the tokens that agent runs use to call the hub. Old deployments may still have `BRIDGE_TOKEN_SECRET`; it is still read. |
-| `EXECUTION_PROVIDER` | `render.yaml`: `cloud_run` | Starts agent runs on Cloud Run. |
-| `GCP_PROJECT_ID` | Dashboard | `natyasutra-agents` or your project. |
+| `RUNTIME_TOKEN_SECRET` | Generated by `render.yaml` | Signs the tokens that agent runs use to call the hub. At least 32 characters in production. |
+| `EXECUTION_PROVIDER` | `render.yaml`: `cloud_run_service` | Sends agent runs to the Cloud Run service. |
+| `RUNTIME_SERVICE_URL` | Dashboard | The service's address (step 3.8). |
 | `GCP_DISPATCHER_KEY` | Dashboard (secret) | Base64 of the dispatcher key (step 3.6). |
-| `GCP_REGION` | Optional | Default `us-west1`. |
-| `GCP_JOB_NAME` | Optional | Default `collab-agent-runtime`. |
 | `GITHUB_ALLOWED_REPOS` | Dashboard | `owner/name,owner/other`. |
-| `HUB_BASE_URL` | Optional | Defaults to Render's external URL. |
 | `ALLOW_REGISTRATION` | `render.yaml`: `false` | Sign-up is closed by default. |
 | `LOG_LEVEL` | `render.yaml`: `INFO` | Log level. |
 
-Google Cloud settings that are not on Render: the job's image, service accounts, timeouts and environment (step 3.5), and the secrets in Secret Manager.
+Google Cloud settings that are not on Render: the service's image, service accounts, scaling and environment (step 3.5), and the secrets in Secret Manager.
 
 ## 5. Operating the hub
 
-**Watching runs.** In Render, the service logs show each request. In Google Cloud, list recent executions with `gcloud run jobs executions list --job collab-agent-runtime --region us-west1` and read one execution's logs in Cloud Logging. A run that never starts is failed by the hub after 15 minutes, with "The agent did not start in time."
+**Watching runs.** In Render, the service logs show each request. In Google Cloud, read the agent service's logs in Cloud Logging, for example:
+
+```sh
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=collab-agent-runtime-service" --project <project> --limit 50 --format "value(timestamp,textPayload)"
+```
+
+Each run logs `timing stage=...` lines, so you can see where its time went (see [runtime](components/runtime.md)). A run that never starts is failed by the hub after 15 minutes, with "The agent did not start in time."
 
 **Updating the hub.** Push to `main`. Migrations run before the new version starts.
 
-**Updating the runtime.** Build a new image, push it, and update the job to the new digest. Test with a mention in a test channel before you tell the team.
+**Updating the runtime.** Build a new image, push it, and point the service at the new digest:
+
+```sh
+gcloud run services update collab-agent-runtime-service --region us-west1 --image us-west1-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime@sha256:<new-digest>
+```
+
+This starts a new revision, and the warm instance is replaced. A run in progress on the old instance is cut off and fails. Test with a mention in a test channel before you tell the team.
 
 **Rotating secrets.**
 - Anthropic key: add a new version of `anthropic-api-key` in Secret Manager. The next run reads the newest version. Disable the old one when you are sure.
@@ -237,7 +273,8 @@ Use `EXECUTION_PROVIDER=fake` here (the default), so no run reaches Google Cloud
 
 ## Known limits
 
-- **One hub instance.** The rate limiter, the realtime fan-out and the execution worker run in process. Two instances would fan out events to only some subscribers and could start a run twice. Scaling out needs a shared store and a message bus first (see [security](security.md#10-known-limitations)).
-- **Starting a run is not idempotent at the provider.** `jobs:run` has no idempotency key, so a timed-out call can start a second execution. That execution's lease exchange is refused, so it exits without doing any work. See [execution](components/execution.md#cloud-run-provider).
+- **One hub instance.** The rate limiter, the realtime fan-out and the execution worker run in process. Two instances would fan out events to only some subscribers and could dispatch a run twice. Scaling out needs a shared store and a message bus first (see [security](security.md#10-known-limitations)).
+- **Capacity.** The service runs one run per instance, with at most three instances. A fourth simultaneous run waits for an instance to free up. If none frees up in time, the dispatch is refused, retried, and then fails after 15 minutes. A run that needs a new instance waits while Cloud Run starts one.
+- **Dispatch retries.** A dispatch that cannot reach the service is retried three times, then the sweeper fails the run after 15 minutes. See [execution](components/execution.md#cloud-run-service-provider).
 - **Sessions have a memory cap.** Earlier turns are replayed up to 40 turns and 20,000 characters. Longer sessions lose their oldest turns. See [backend](components/backend.md#sessions).
 - **Free plans sleep.** Render spins down after 15 minutes without traffic, and Supabase pauses after a week. Both need a manual or scheduled wake-up if the team relies on the hub being always available.

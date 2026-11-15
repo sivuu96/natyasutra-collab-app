@@ -88,8 +88,9 @@ Migrations are PostgreSQL-first. Constraint names must be wrapped in `op.f(...)`
 | `e7a8b9c0d1e2` | User handles |
 | `f2a3b4c5d6e7` | Removes the local bridge: devices, pairing, approvals, inbound events, Codex, and bridge-only columns. Refuses to run while a device-backed agent exists. Cannot be reversed. |
 | `a3b4c5d6e7f8` | Drops columns nothing read: agent description, platform admin flag, session last-seen time. Cannot be reversed. |
+| `b4c5d6e7f8a9` | Drops the two outbox columns only the removed job stop step used. Reversible: restores the empty columns. |
 
-The last migration was checked on PostgreSQL 16: it refused with a device-backed agent present, ran after that agent was removed, and `alembic check` reported no drift.
+The bridge migration was checked on PostgreSQL 16: it refused with a device-backed agent present, ran after that agent was removed, and `alembic check` reported no drift. The latest migration was checked the same way: upgrade, downgrade, upgrade, then `alembic check`, with no drift.
 
 ### Seed data
 
@@ -111,7 +112,7 @@ Creates `alice@example.com` (owner) and `bob@example.com` (member) in a team, a 
 
 ### Agents locally
 
-With `EXECUTION_PROVIDER=fake`, a mention or session turn is queued, and the worker records a submission. No runtime starts, so no reply appears. To test the runtime end to end, run the real container (below) against a real Google Cloud job, or test the runtime in isolation (the runtime tests use a fake hub and a fake Claude Code binary).
+With `EXECUTION_PROVIDER=fake`, a mention or session turn is queued, and the worker records a submission. No runtime starts, so no reply appears. To test the runtime end to end, run the real container (below) against the real Cloud Run service, or test the runtime in isolation (the runtime tests use a fake hub and a fake Claude Code binary).
 
 ## Runtime (Python 3.11)
 

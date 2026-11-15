@@ -1,6 +1,6 @@
 # Runtime
 
-The runtime is the container that performs one agent run. It starts, does one piece of work, reports to the hub, and exits. It has no credentials of its own: it gets a one-use lease from the hub, reads its secrets from Google Secret Manager, and sends everything it does back to the hub as events.
+The runtime is the service that performs agent runs. It runs as a Cloud Run service with one warm instance. The hub sends it one invocation at a time; the runtime does the work, reports to the hub, and returns. It has no credentials of its own: it gets a one-use lease from the hub with each request, reads its secrets from Google Secret Manager, and sends everything it does back to the hub as events.
 
 Source: `runtime/`. Image: `runtime/Dockerfile`. Python package: `runtime/collab_runtime/`. Tests: `runtime/tests/`.
 
@@ -12,7 +12,7 @@ Source: `runtime/`. Image: `runtime/Dockerfile`. Python package: `runtime/collab
 | Agent | Claude Code CLI, pinned by `ARG CLAUDE_CODE_VERSION` (currently `2.1.322`). Upgrade on purpose, after reading the release notes. |
 | Tools | Python 3 in a virtual environment (`httpx`, `pyjwt`, `cryptography`, `google-cloud-secret-manager`), `git`, `ca-certificates` |
 | User | `runner` (uid 10001), no login shell. The image holds no secrets. |
-| Entry point | `python3 -m collab_runtime` |
+| Entry point | `python3 -m collab_runtime`, which starts the HTTP service on `$PORT` |
 
 Build from the repository root, so the image contains `runtime/`:
 
@@ -20,31 +20,39 @@ Build from the repository root, so the image contains `runtime/`:
 docker build -f runtime/Dockerfile -t <region>-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime:<tag> .
 ```
 
+## The HTTP service
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /runs` | Run one invocation. The body is `{"execution_name": "...", "lease": "..."}`. The request stays open until the run ends, then the response is `200 {"exit_code": n}`. |
+| `GET /healthz` | Returns `200`. |
+
+- Cloud Run allows only the hub's dispatcher account to call it (`run.invoker`). The service does not check tokens itself.
+- The service runs at concurrency 1, so one request is one run. A second request for an execution that is already running here gets `409 already_running`.
+- A request that is missing either field, or is not JSON, gets `400`. Request bodies are never logged, because they contain the lease.
+
 ## Configuration
 
-The job gets these from its environment. The hub sends the per-run values; the rest are set on the job.
+The service gets these from its environment. The hub sends the per-run values in the request; the rest are set on the service.
 
 | Variable | Set by | Purpose |
 |---|---|---|
-| `INVOCATION_ID` | hub, per run | The run this execution is for. |
-| `DEDUPE_KEY` | hub, per run | Identifies the attempt. |
-| `HUB_BASE_URL` | hub, per run | Where to exchange the lease and send events. |
-| `RUN_LEASE` | hub, per run | The one-use lease. Removed from the environment as soon as it is read. |
-| `CLOUD_RUN_EXECUTION` | Cloud Run | The execution's name. The hub checks it against the lease. |
-| `GCP_PROJECT_ID` | job | Project for Secret Manager. Default `natyasutra-agents`. |
-| `ANTHROPIC_SECRET_NAME` | job | Default `anthropic-api-key`. |
-| `GITHUB_KEY_SECRET_NAME` | job | Default `github-app-key`. |
-| `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID` | job | Identify the GitHub App and its installation. |
-| `CLAUDE_MODEL` | job | Default `claude-haiku-5-5`. |
+| `HUB_BASE_URL` | service | Where to exchange the lease and send events. Required. |
+| `PORT` | Cloud Run | The port to listen on. Default `8080`. |
+| `GCP_PROJECT_ID` | service | Project for Secret Manager. Default `natyasutra-agents`. |
+| `ANTHROPIC_SECRET_NAME` | service | Default `anthropic-api-key`. |
+| `GITHUB_KEY_SECRET_NAME` | service | Default `github-app-key`. |
+| `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID` | service | Identify the GitHub App and its installation. |
+| `CLAUDE_MODEL` | service | Default `claude-haiku-5-5`. |
 | `CLAUDE_BINARY` | image | Default `claude`. |
-| `RUN_TIMEOUT_SECONDS` | job | Default `1500` (25 minutes). |
-| `HEARTBEAT_SECONDS` | job | Default `30`. |
+| `RUN_TIMEOUT_SECONDS` | service | Default `1500` (25 minutes). |
+| `HEARTBEAT_SECONDS` | service | Default `30`. |
 
 ## A run, step by step
 
-1. **Read the lease** from `RUN_LEASE` and remove it from the environment. If it is missing, exit with code 2.
-2. **Exchange the lease** with `POST /api/v1/internal/executions/exchange`, giving the execution name. The hub returns the prompt, the agent's handle, the repository and branch, and a runtime token. If the hub refuses, exit with code 3 (see [Execution](execution.md#one-use-run-leases)).
-3. **Report `started`.** If the harness is not supported, report `failed` and exit.
+1. **Receive the request** and claim the execution name. A second request for the same name is refused with `409`.
+2. **Exchange the lease** with `POST /api/v1/internal/executions/exchange`, giving the execution name. The hub returns the prompt, the agent's handle, the repository and branch, and a runtime token. For a session turn it also returns the session ID, the new message and the previous turn's ID. If the hub refuses, the run stops with exit code 3 (see [Execution](execution.md#one-use-run-leases)).
+3. **Report `started`.** If the harness is not supported, report `failed` and stop.
 4. **Read the Anthropic key** from Secret Manager. If that fails, report `failed` (`secret_unavailable`). The run never continues without its key.
 5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository with read-only contents access, and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary directory that is deleted when the run ends.
 6. **Run Claude Code** in the clone:
@@ -52,18 +60,24 @@ The job gets these from its environment. The hub sends the per-run values; the r
    Only `Read`, `Glob` and `Grep` are allowed. The agent cannot write files, run commands or reach the network through its tools. Its environment contains only the Anthropic key.
 7. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
 8. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
+9. **Delete the temporary directory** and return the response.
 
-The runtime sends a heartbeat every 30 seconds while the agent runs. A run that exceeds `RUN_TIMEOUT_SECONDS` is stopped. If the hub cancels the run, the runtime stops Claude Code at once. A SIGTERM from Cloud Run stops it too.
+The runtime sends a heartbeat every 30 seconds while the agent runs. A run that exceeds `RUN_TIMEOUT_SECONDS` is stopped. If the hub cancels the run, the runtime stops Claude Code at its next heartbeat.
 
-### Exit codes
+Each run logs `timing stage=<name> ms=<n>` lines, measured from the start of the run: `start`, `exchanged`, `secret_read`, `repo_ready`, `agent_started`, `first_output`, `agent_finished` and `completed`. They are in the service's Cloud Logging entries.
+
+### Response codes
+
+The response is `200` once the run has ended, whatever its outcome. The `exit_code` says how it ended:
 
 | Code | Meaning |
 |---|---|
 | 0 | The run finished and the hub has the result. |
 | 1 | The run failed. A `failed` event was sent. |
-| 2 | Configuration error: the lease is missing. Nothing was reported. |
-| 3 | The hub refused the exchange (for example, the lease was used or expired). Nothing was reported, because there is no token to report with. The hub's run timeout will fail the run. |
+| 3 | The hub refused the exchange (for example, the lease was used or expired). Nothing was reported, because there is no token to report with. The hub's sweeper will fail the run. |
 | 4 | The hub could not be reached while reporting. |
+
+The hub does not read `exit_code`. It is for the logs.
 
 ## Events
 
@@ -94,12 +108,13 @@ Rules:
 
 - The runtime trusts nothing it receives except the hub's answer to its lease. Its token expires after 15 minutes and works only for its own invocation.
 - The GitHub token covers one repository and only reads it. The App's private key is in Secret Manager, never in the image or the environment.
-- The service account of the job can read the two secrets and write logs, and nothing else. See [deployment](../deployment.md#3-google-cloud-setup-agent-runs).
+- The service's account (`agent-runtime`) can read the two secrets and write logs, and nothing else. See [deployment](../deployment.md#34-service-accounts-and-roles).
 - stderr from Claude Code is written to a temporary file, and only its last 300 characters are reported, after redaction.
 
 ## Limits
 
-- One run is one container. The clone is shallow, and the working copy is deleted at the end.
+- One request is one run. The clone is shallow, and the working copy is deleted at the end.
+- A run is cut off if Cloud Run stops its instance in the middle of it. The runtime does not handle that signal. The hub's sweeper fails the run after about 5 minutes without a heartbeat.
 - The agent has no memory between runs. Sessions give it earlier turns in the prompt; see [Backend](backend.md#sessions).
 - The agent cannot change the repository, open pull requests, or use the network beyond the Anthropic API.
 - Only `claude_code` is supported. Any other harness reports `unsupported_harness`.
@@ -111,4 +126,4 @@ cd runtime
 ..\backend\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The tests use a fake hub and a fake Claude Code binary. They cover the exchange, event ordering and the duplicate answer, redaction, cancellation stopping the agent, timeouts, missing secrets, the repository checks, and the command line passed to Claude Code.
+The tests use a fake hub and a fake Claude Code binary. They cover the exchange, event ordering and the duplicate answer, redaction, cancellation stopping the agent, timeouts, missing secrets, the repository checks, the command line passed to Claude Code, and the HTTP service's requests, including the duplicate refusal and the rule that request bodies are never logged.
