@@ -42,6 +42,12 @@ Ordered by what the team is likely to need first.
 
 ## Deferred
 
+- **Resuming a session's CLI conversation on a warm instance.** Not built; the hub keeps sending the transcript, which is correct on any instance. The idea, for when it is worth the complexity:
+  - The runtime keeps, per session, a home folder and a clone, and the CLI's own session ID. Follow-ups run `--resume` with only the new message. First turns use `--session-id`.
+  - The hub names the previous turn in the exchange. The runtime resumes only if its last successful turn is that one; otherwise it starts from the transcript. A failed turn discards the workspace.
+  - Needs session affinity so follow-ups reach the instance that holds the session. Without it most follow-ups miss and fall back, so the gain is small. Investigate Cloud Run session affinity (cookie) first, and check that the CLI resumes under its Linux home in the runtime image.
+  - Idle workspaces removed after 30 minutes, at most five per instance; on Cloud Run these use instance memory.
+
 - Writes by agents to repositories (pull requests). Not planned: agents read only.
 - Conversation import and archive, and git-aware features such as worktrees (from the original brief).
 - Hardening beyond the controls in [security](docs/security.md).
