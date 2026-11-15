@@ -36,8 +36,8 @@ class Settings(BaseSettings):
     execution_provider: Literal["fake", "cloud_run_service"] = "fake"
     # URL of the private Cloud Run service that runs agent invocations in warm-instance mode.
     runtime_service_url: str | None = None
-    # Password reset emails, sent through Resend. Without a key, reset requests are refused with a clear message.
-    # The sender address must be on a domain verified with the provider.
+    # Password reset emails, sent through Brevo. Without a key, reset requests are refused with a clear message.
+    # EMAIL_FROM is the sender verified in Brevo, for example `NatyaSutra <you@example.com>`.
     email_api_key: SecretStr | None = None
     email_from: str | None = None
     # Public address of the web app, used in reset links. Render sets RENDER_EXTERNAL_URL.

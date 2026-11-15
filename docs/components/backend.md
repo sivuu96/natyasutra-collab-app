@@ -32,8 +32,8 @@ Settings come from environment variables, or from `backend/.env` in development.
 | `DATABASE_URL` | `sqlite:///./collab_dev.db` | SQLAlchemy URL. Production uses PostgreSQL; `postgres://` URLs are accepted. |
 | `RUNTIME_TOKEN_SECRET` | generated per process | Signs runtime tokens. Required in production (32+ characters). |
 | `EXECUTION_PROVIDER` | `fake` | `fake` for local runs and tests; `cloud_run_service` to send runs to the Cloud Run service. |
-| `EMAIL_API_KEY` | none | Resend API key for password reset emails. A secret. Without it, reset requests get a 503 that says email is not set up. |
-| `EMAIL_FROM` | none | Sender address for reset emails, on a domain verified with Resend. |
+| `EMAIL_API_KEY` | none | Brevo API key for password reset emails. A secret. Without it, reset requests get a 503 that says email is not set up. |
+| `EMAIL_FROM` | none | Sender for reset emails, verified in Brevo, for example `NatyaSutra <you@example.com>`. |
 | `PUBLIC_APP_URL` | `RENDER_EXTERNAL_URL` | Address of the web app, used in reset links. |
 | `GCP_DISPATCHER_KEY` | none | Base64 of the dispatcher service-account key JSON. Required with `cloud_run_service`. A secret: never logged or returned. |
 | `RUNTIME_SERVICE_URL` | none | Address of the Cloud Run service that runs agents. Required with `cloud_run_service`. |
