@@ -5,6 +5,7 @@ import type { Channel, Member, Message, ProjectAgent } from "../api/types";
 import { Button, Card, EmptyState, ErrorText, formatTime, Input, Label, TextArea, errorMessage } from "../components/ui";
 import { useWorkspace } from "../project/workspaceContext";
 import { useAuth } from "../auth/AuthContext";
+import { Markdown } from "../components/Markdown";
 import { activeMention, applyMention, suggestMentions, type MentionCandidate } from "../discussions/mentions";
 import { activeRuns, applyRunEvent, type RunProgressMap } from "../discussions/runProgress";
 
@@ -251,6 +252,10 @@ export function DiscussionsView() {
               Cancel
             </Button>
           </form>
+        ) : message.author_agent_handle && !message.deleted_at ? (
+          <div className="mt-1 text-stone-900">
+            <Markdown text={message.body} />
+          </div>
         ) : (
           <p className="mt-1 whitespace-pre-wrap text-sm text-stone-900">
             <Body text={message.body} />

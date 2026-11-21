@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, ErrorText, formatTime, Input, Label, Select, 
 import { canCancelInvocation, isActive } from "../agents/permissions";
 import { appendDelta, clearInvocation, deltaForSession, type StreamingText } from "../sessions/streaming";
 import { useWorkspace } from "../project/workspaceContext";
+import { Markdown } from "../components/Markdown";
 import { RunFiles } from "../components/RunFiles";
 
 export function SessionsView() {
@@ -277,14 +278,14 @@ export function SessionsView() {
                     {m.role === "agent" ? `@${m.agent_handle ?? "agent"}` : (m.author_display_name ?? "You")} ·{" "}
                     {formatTime(m.created_at)}
                   </p>
-                  <p className="whitespace-pre-wrap">{m.body}</p>
+                  {m.role === "agent" ? <Markdown text={m.body} /> : <p className="whitespace-pre-wrap">{m.body}</p>}
                   <RunFiles projectId={project.id} invocationId={m.invocation_id} files={m.files} />
                 </div>
               ))}
               {streamingForSession.map(([id, text]) => (
                 <div key={id} className="text-sm italic text-stone-600" aria-live="polite">
                   <p className="text-xs not-italic text-stone-500">@{selected.agent_handle} is replying…</p>
-                  <p className="whitespace-pre-wrap">{text}</p>
+                  <Markdown text={text} />
                 </div>
               ))}
             </Card>
