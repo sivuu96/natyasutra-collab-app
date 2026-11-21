@@ -181,7 +181,6 @@ def _persist_reply(db: Session, invocation: AgentInvocation, agent: Agent, text:
         session = db.get(AgentSession, invocation.session_id)
         if session is not None:
             session.last_activity_at = utcnow()
-        invocation.result_message_id = None
         return [
             (
                 invocation.project_id,
@@ -210,7 +209,6 @@ def _persist_reply(db: Session, invocation: AgentInvocation, agent: Agent, text:
     )
     db.add(message)
     db.flush()
-    invocation.result_message_id = message.id
     return [
         (
             invocation.project_id,

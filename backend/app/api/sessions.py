@@ -440,7 +440,6 @@ def close_session(
     if session.owner_user_id != user.id and ROLE_RANK[membership.role] < ROLE_RANK[ProjectRole.ADMIN.value]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner or an admin can close it")
     session.status = SessionStatus.CLOSED.value
-    session.closed_at = utcnow()
     record_audit(
         db,
         action="session.closed",

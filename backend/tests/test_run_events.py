@@ -46,7 +46,9 @@ def test_a_full_run_is_recorded_and_its_reply_is_saved_as_a_channel_message(
         assert invocation is not None
         assert invocation.status == InvocationStatus.COMPLETED.value
         assert invocation.completed_at is not None
-        message = db.get(Message, invocation.result_message_id)
+        message = db.scalar(
+            select(Message).where(Message.channel_id == invocation.channel_id, Message.body == "Here is the summary.")
+        )
         assert message is not None
         assert message.body == "Here is the summary."
         assert message.author_agent_id == invocation.agent_id

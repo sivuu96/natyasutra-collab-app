@@ -86,9 +86,6 @@ class AgentInvocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(60), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    result_message_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
-    )
     completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Last time the runtime reported in (exchange, event, or heartbeat). Used to detect stuck runs.
     last_activity_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

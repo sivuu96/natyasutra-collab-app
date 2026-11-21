@@ -82,7 +82,6 @@ def create_app(settings: Settings | None = None, engine: Engine | None = None) -
     app.state.session_factory = make_session_factory(db_engine)
     app.state.rate_limiter = RateLimiter()
     app.state.email_sender = build_sender(settings)
-    app.state.execution_mode = settings.execution_provider
     app.state.execution_provider = execution_provider
 
     app.add_middleware(

@@ -30,7 +30,6 @@ class AgentSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     visibility: Mapped[str] = mapped_column(String(10), nullable=False, default=SessionVisibility.PRIVATE.value)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default=SessionStatus.ACTIVE.value)
     last_activity_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    closed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set when the session is deleted. Deleted sessions are hidden everywhere; the row is kept.
     deleted_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
