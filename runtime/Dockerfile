@@ -11,7 +11,7 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     && npm cache clean --force
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates git \
+    && apt-get install -y --no-install-recommends python3 python3-venv ca-certificates git poppler-utils \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
