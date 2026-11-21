@@ -52,7 +52,7 @@ The exchange (`POST /api/v1/internal/executions/exchange`) refuses, in this orde
 7. The execution name does not match the bound one: `execution_mismatch` (409). Only the exact name is accepted.
 8. The agent's repository is not on the allow-list: `repository_not_allowed` (409). This is checked before the lease is used, so a configuration mistake does not waste the run's only credential.
 
-When every check passes, the lease is marked used and the invocation moves from `queued` to `accepted`. The response includes a runtime token, valid for 15 minutes and bound to the invocation, along with the prompt, the repository and branch, and for session turns the session ID, the new message and the previous turn's ID.
+When every check passes, the lease is marked used and the invocation moves from `queued` to `accepted`. The response includes a runtime token, valid for 15 minutes and bound to the invocation, along with the prompt, the agent's handle, the repository and branch. The exact fields are in [Architecture section 16](../architecture.md#163-exchange-runtime-to-hub).
 
 ## Cloud Run service provider
 

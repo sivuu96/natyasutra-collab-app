@@ -212,7 +212,7 @@ The agent does not keep anything between turns. Each turn is a fresh Claude Code
 
 ## 7. The runtime service, step by step
 
-The service is `python -m collab_runtime serve`. Cloud Run keeps one instance running. The instance handles one request at a time, and each request is one agent run.
+The service is `python -m collab_runtime serve`. Cloud Run keeps one instance running. The instance handles one request at a time, and each request is one agent run. The exact requests, responses and credentials for each step are in [section 16](#16-the-run-protocol-in-detail).
 
 ```mermaid
 flowchart TD
@@ -441,3 +441,182 @@ The agent is the least trusted party. Repository content is untrusted input to i
 - **No conversation memory in the CLI.** Each turn starts a fresh CLI; earlier turns come through the prompt, up to 40 turns and 20,000 characters.
 - **The agent cannot write files or change the repository.** Writing to GitHub is planned, and needs separate design (see [Implementation plan](../IMPLEMENTATION_PLAN.md#deferred)).
 - **Output is streamed as it is written.** A file's text can show in the stream before the reply is saved without it.
+
+## 16. The run protocol in detail
+
+This section lists every message between the hub, the runtime service and the outside services: what is sent, how it is authenticated, and what comes back. Use it when debugging a run.
+
+### 16.1 Credentials
+
+| Credential | Created by | Format | Lifetime | Sent as | Checked by |
+|---|---|---|---|---|---|
+| Dispatcher service-account key | Downloaded once from Google Cloud, stored in Render as `GCP_DISPATCHER_KEY` | Service-account JSON, base64-encoded | Until rotated | Never sent; the hub uses it to sign identity tokens | Google |
+| Identity token (dispatch) | The hub, for each dispatch, refreshed when it expires | Google-signed token whose audience is the service URL | About one hour | `Authorization: Bearer` on `POST /runs` | Cloud Run IAM, which requires `run.invoker` |
+| Run lease | The hub's outbox worker, for each dispatch attempt | Random URL-safe string of 32 bytes (43 characters) | 10 minutes, one use. The hub stores only its SHA-256 | `Authorization: Bearer` on the exchange, and in the dispatch body | The hub: hash match, not revoked, not expired, not used, bound to this execution, repository allowed |
+| Runtime token | The hub, when the lease is exchanged | HS256 JWT signed with `RUNTIME_TOKEN_SECRET`. Claims: `sub` = invocation ID, `aud` = `collab-runtime`, `iss` = `collab-hub`, `iat`, `exp` | 15 minutes | `Authorization: Bearer` on every event | The hub: signature, audience, issuer, expiry and subject |
+| GitHub App JWT | The runtime, for each run | RS256 JWT signed with the App's private key. Claims: `iss` = App ID, `iat` = now minus 60 s, `exp` = now plus 540 s | About 9 minutes from signing | `Authorization: Bearer` on the token request | GitHub |
+| GitHub installation token | The runtime, for each run | Token returned by GitHub, limited to one repository with read-only contents | About one hour | `Authorization: basic` header on git commands (16.7) | GitHub |
+| Anthropic API key | Stored in Secret Manager; read by the runtime for each run | `sk-ant-…` key | Until rotated | Added by the proxy as `x-api-key` on each request to Anthropic | Anthropic |
+| Secret Manager access | Cloud Run gives the service its account (`agent-runtime`) through the metadata server | Google access token, obtained automatically | Short-lived | Secret Manager API calls | IAM: `secretAccessor` on the two secrets |
+| Browser session | The hub, at sign-in | Opaque token in an HttpOnly cookie; the hub stores its hash | 24 hours idle, 14 days in total | Cookie | The hub |
+| CSRF token | The hub, as the `ns_csrf` cookie | Random value | Same as the session | `X-CSRF-Token` header on writes | The hub: must match the cookie |
+
+### 16.2 Dispatch: hub to runtime service
+
+```
+POST {RUNTIME_SERVICE_URL}/runs
+Authorization: Bearer <identity token>
+Content-Type: application/json
+
+{"execution_name": "service/<invocation id>/<32 hex characters>",
+ "lease": "<43-character lease>"}
+```
+
+- **Timeouts:** connect, write and pool 20 seconds each; read 1,800 seconds, because the response comes when the run ends.
+- **Retries:** connection errors, `5xx`, `408` and `429` are retried, up to three attempts in all, with pauses of 2 and then 4 seconds. A `409` counts as delivered, because the service already has that execution running. Other `4xx` responses are logged and not retried.
+- **What Cloud Run checks first:** the identity token's signature and audience, and that the caller has `run.invoker` on the service. Anything else is refused before the request reaches the runtime.
+- **Response when the run ends:** `200 {"exit_code": <n>}`.
+- **Service errors:** `400 {"detail": "invalid_request"}` for missing fields, bad JSON or a body over 16 KB; `409 {"detail": "already_running"}`; `404` for other paths.
+
+The dispatch request runs in a background thread, so the hub's worker does not wait for the run.
+
+### 16.3 Exchange: runtime to hub
+
+```
+POST {HUB_BASE_URL}/api/v1/internal/executions/exchange
+Authorization: Bearer <lease>
+Content-Type: application/json
+
+{"execution_name": "<the execution name from the dispatch>"}
+```
+
+Success, `200`:
+
+```json
+{
+  "invocation_id": "<uuid>",
+  "prompt": "<the message, or for a session turn the transcript followed by the message>",
+  "agent_handle": "claude",
+  "harness": "claude_code",
+  "runtime_token": "<HS256 JWT, 15 minutes>",
+  "runtime_expires_in": 900,
+  "repository": "owner/name",
+  "ref": "main"
+}
+```
+
+`repository` and `ref` are `null` for an agent without a repository.
+
+Refusals, with the body `{"detail": "<code>"}`:
+
+| Status | Codes | Meaning |
+|---|---|---|
+| 401 | `invalid_lease`, `lease_revoked`, `lease_expired` | The lease is unknown, replaced by a newer attempt, or too old. |
+| 409 | `lease_used` | The lease was already exchanged. |
+| 409 | `run_not_active` | The invocation has already finished. |
+| 409 | `execution_not_bound` | The hub has not recorded the execution yet. The runtime treats this as a refusal. |
+| 409 | `execution_mismatch` | The execution name is not the one the lease was bound to. |
+| 409 | `repository_not_allowed` | The repository is not on `GITHUB_ALLOWED_REPOS`. Refused before the lease is used. |
+
+On success the hub marks the lease used and the invocation `accepted`. A refusal stops the run with exit code 3, and nothing is reported, because there is no runtime token to report with.
+
+### 16.4 Events: runtime to hub
+
+```
+POST {HUB_BASE_URL}/api/v1/internal/executions/events
+Authorization: Bearer <runtime token>
+Content-Type: application/json
+
+{"sequence": 3, "type": "output", "text": "..."}
+```
+
+| Type | Fields | Limits |
+|---|---|---|
+| `started` | none | |
+| `progress` | `text`: a stage line | 20,000 characters |
+| `heartbeat` | none | Sent every 30 seconds, the first at 30 seconds, until the run finishes |
+| `output` | `text`: a complete piece of the agent's text | 20,000 characters, redacted |
+| `file` | `name`, `content` | Name: letters, digits, dots, dashes and underscores, starting with a letter or digit, up to 120 characters. Content: up to 100,000 characters |
+| `message` | `text`: the reply | 20,000 characters |
+| `completed` | none | |
+| `failed` | `code`, `message` | Code up to 60 characters, message up to 500 |
+
+Responses:
+
+| Status | Body | Meaning |
+|---|---|---|
+| 200 | `{"duplicate": false}` | Stored and applied. |
+| 200 | `{"duplicate": true}` | This sequence number was already stored. Nothing changes. |
+| 401 | `{"detail": "invalid_runtime_token"}` | Missing, wrong, expired, or for another invocation. |
+| 404 | `{"detail": "run_not_found"}` | No such invocation. |
+| 409 | `{"detail": "run_finished"}` | The run has ended. The runtime stops the agent. |
+| 422 | validation error | A field is missing, too long or does not match its rule. |
+
+Sequence numbers start at 0 and go up by one. The runtime counts a sequence only after a successful send, so a retry sends the same number again, and the hub drops the duplicate.
+
+Retries: a connection error or `5xx` is retried, up to three attempts in all, with pauses of 2 and then 4 seconds. A `4xx` is not retried: the run stops at once with exit code 4. If every attempt fails, the run also stops with exit code 4.
+
+What the hub does with each event:
+- Records the sequence number and type in `run_events`, for every event, including heartbeats.
+- `started`, `progress`, `output` and `heartbeat` update the run's activity time. `progress` and `output` are published live, and their text is not saved.
+- `file` saves the file, up to five per run. A repeated name or a sixth file is ignored.
+- `message` saves the reply as a channel message or as a session message, and publishes it.
+- `completed` and `failed` set the final status, and publish the change.
+
+### 16.5 Model calls: Claude Code to proxy to Anthropic
+
+Claude Code sends ordinary Messages API requests to `ANTHROPIC_BASE_URL`, which is the proxy:
+
+```
+POST http://127.0.0.1:<port>/v1/messages
+x-api-key: held-by-runtime        (a placeholder)
+<the CLI's other headers and JSON body, unchanged>
+```
+
+The proxy:
+1. Refuses any path that does not start with `/v1/`, with `404`.
+2. Drops the CLI's `authorization`, `x-api-key`, `host`, `content-length`, `connection`, `accept-encoding` and `transfer-encoding` headers.
+3. Adds `x-api-key: <the real key>`.
+4. Sends the request to `https://api.anthropic.com` with the same path and body, and streams the response back as it arrives. Its headers are passed on except `content-length`, `transfer-encoding`, `connection` and `content-encoding`.
+5. On a connection failure, answers `502 {"detail": "model service unavailable"}`, with nothing about the request.
+
+### 16.6 Reading the CLI's output
+
+The runtime reads the CLI's standard output one line at a time, as JSON:
+- An `assistant` line: its text blocks are joined. The text is redacted and sent as an `output` event.
+- A `result` line: its `result` field becomes the final text. Its `is_error` flag, or a subtype other than `success`, makes the run a failure.
+- Any other line is ignored.
+
+Output is capped at 1,000,000 bytes. After the cap, the runtime sends one notice, `[output truncated: limit reached]`, and drops the rest. The CLI's error output is kept in a temporary file, and only its last 300 characters are used on failure, after redaction. The CLI is stopped if it runs past `RUN_TIMEOUT_SECONDS` (default 1,500), with the code `timeout`.
+
+### 16.7 Repository: runtime to GitHub
+
+1. **Token request**
+
+   ```
+   POST https://api.github.com/app/installations/{installation id}/access_tokens
+   Authorization: Bearer <GitHub App JWT>
+   Accept: application/vnd.github+json
+   X-GitHub-Api-Version: 2022-11-28
+
+   {"repositories": ["<repository name>"], "permissions": {"contents": "read"}}
+   ```
+
+   The expected answer is `201` with `{"token": "..."}`. Anything else is a refusal.
+
+2. **Probe** (`git ls-remote`). An empty result means the repository has no commits. That is not an error: the run goes on, and the agent is told there are no files.
+3. **Clone** (`git clone --depth 50 --single-branch --branch <ref> https://github.com/<owner>/<repo>.git <folder>`). The token is sent as a header, `http.extraHeader=Authorization: basic base64("x-access-token:<token>")`. The credential helper and the askpass program are disabled, terminal prompts are off, and the command times out after 120 seconds. Error text is cleaned of the token before it is used.
+
+### 16.8 Secrets: runtime to Secret Manager
+
+The runtime reads `projects/<GCP_PROJECT_ID>/secrets/anthropic-api-key/versions/latest` and `projects/<GCP_PROJECT_ID>/secrets/github-app-key/versions/latest`, with the credentials of the service account. The value is decoded as UTF-8 and stripped of surrounding whitespace. It is kept in memory only.
+
+### 16.9 Requests the service accepts
+
+| Path | Method | Response |
+|---|---|---|
+| `/runs` | `POST` | Described in 16.2 |
+| `/healthz` | `GET` | `200 {"status": "ok"}` |
+| any other | any | `404` |
+
+The service never logs request bodies, because they contain the lease. It logs the method and path only.

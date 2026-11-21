@@ -54,7 +54,7 @@ The service gets these from its environment. The hub sends the per-run values in
 ## A run, step by step
 
 1. **Receive the request** and claim the execution name. A second request for the same name is refused with `409`.
-2. **Exchange the lease** with `POST /api/v1/internal/executions/exchange`, giving the execution name. The hub returns the prompt, the agent's handle, the repository and branch, and a runtime token. For a session turn it also returns the session ID, the new message and the previous turn's ID. If the hub refuses, the run stops with exit code 3 (see [Execution](execution.md#one-use-run-leases)).
+2. **Exchange the lease** with `POST /api/v1/internal/executions/exchange`, giving the execution name. The hub returns the prompt, the agent's handle, the repository and branch, and a runtime token. The exact request and response are in [Architecture section 16](../architecture.md#163-exchange-runtime-to-hub). If the hub refuses, the run stops with exit code 3 (see [Execution](execution.md#one-use-run-leases)).
 3. **Report `started`.** If the harness is not supported, report `failed` and stop.
 4. **Read the Anthropic key** from Secret Manager. If that fails, report `failed` (`secret_unavailable`). The run never continues without its key.
 5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository with read-only contents access, and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary folder that is deleted when the run ends.
