@@ -14,9 +14,9 @@ import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 ANTHROPIC_KEY_SHAPE = re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}")
-ALLOWED_TOOLS = ("Read", "Glob", "Grep")  # read-only; nothing that edits files or runs commands
 MAX_OUTPUT_BYTES = 1_000_000
 
 
@@ -26,12 +26,22 @@ def redact(text: str, api_key: str) -> str:
     return ANTHROPIC_KEY_SHAPE.sub("[redacted]", text)
 
 
-def build_claude_args(binary: list[str], *, model: str, prompt: str) -> list[str]:
-    # Read-only tools, the prompt last, then the output format; plus an explicit model.
+def tool_rules(folder: str) -> list[str]:
+    """Permission rules that confine the read and search tools to one folder.
+
+    Without them, the tools reach any file the process can read. Tested on Linux with the pinned CLI: with these
+    rules, reads and searches outside the folder are refused. The `//` prefix marks an absolute path.
+    """
+    scope = f"//{Path(folder).as_posix().lstrip('/')}/**"
+    return [f"Read({scope})", f"Glob({scope})", f"Grep({scope})"]
+
+
+def build_claude_args(binary: list[str], *, model: str, prompt: str, folder: str) -> list[str]:
+    # Read-only tools confined to the folder, the prompt last, then the output format; plus an explicit model.
     return [
         *binary,
         "--allowedTools",
-        *ALLOWED_TOOLS,
+        *tool_rules(folder),
         "--model",
         model,
         "-p",
@@ -42,12 +52,14 @@ def build_claude_args(binary: list[str], *, model: str, prompt: str) -> list[str
     ]
 
 
-def child_env(api_key: str, home: str) -> dict[str, str]:
+def child_env(home: str, base_url: str) -> dict[str, str]:
+    """The CLI's whole environment. It never holds the Anthropic key: the runtime's proxy adds the key."""
     return {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "HOME": home,
         "LANG": "C.UTF-8",
-        "ANTHROPIC_API_KEY": api_key,
+        "ANTHROPIC_BASE_URL": base_url,
+        "ANTHROPIC_API_KEY": "held-by-runtime",  # a placeholder: the CLI needs a value, the proxy supplies the real one
     }
 
 
@@ -110,11 +122,12 @@ class ClaudeRunner:
         *,
         command: list[str],
         api_key: str,
+        base_url: str,
         workdir: str,
         emit_text: Callable[[str], None],
         cwd: str | None = None,
     ) -> RunOutcome:
-        env = child_env(api_key, workdir)
+        env = child_env(workdir, base_url)
         # stderr goes to a file, not a pipe: an unread pipe could fill up and stall the child.
         # Closed on every path below; a with-block would not cover the reads after the process ends.
         stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")  # noqa: SIM115

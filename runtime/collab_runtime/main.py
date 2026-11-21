@@ -20,6 +20,7 @@ import httpx
 from collab_runtime.github import GitHubError, clone_repository, installation_token
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
+from collab_runtime.model_proxy import ModelProxy
 from collab_runtime.reply_files import INSTRUCTIONS, extract_reply_files
 
 log = logging.getLogger("collab.runtime")
@@ -213,6 +214,7 @@ def _report_run(
                 shlex.split(config.claude_binary),
                 model=config.claude_model,
                 prompt=INSTRUCTIONS + "\n\n" + prompt,
+                folder=cwd,
             )
 
             first_output = [True]
@@ -234,13 +236,16 @@ def _report_run(
 
             sequencer.send("progress", text="Running the agent")
             _mark("agent_started")
-            outcome = runner.run(
-                command=command,
-                api_key=api_key,
-                workdir=workdir,
-                cwd=cwd,
-                emit_text=emit,
-            )
+            # The key stays in this process: the proxy adds it to each request, and the CLI only sees the proxy.
+            with ModelProxy(api_key) as proxy:
+                outcome = runner.run(
+                    command=command,
+                    api_key=api_key,
+                    base_url=proxy.url,
+                    workdir=workdir,
+                    cwd=cwd,
+                    emit_text=emit,
+                )
             _mark("agent_finished")
         if run_finished.is_set():
             return 0

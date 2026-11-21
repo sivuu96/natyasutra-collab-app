@@ -56,8 +56,8 @@ The service gets these from its environment. The hub sends the per-run values in
 4. **Read the Anthropic key** from Secret Manager. If that fails, report `failed` (`secret_unavailable`). The run never continues without its key.
 5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository with read-only contents access, and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary directory that is deleted when the run ends.
 6. **Run Claude Code** in the clone:
-   `claude --allowedTools Read Glob Grep --model <model> -p <prompt> --output-format stream-json --verbose`.
-   Only `Read`, `Glob` and `Grep` are allowed. The agent cannot write files, run commands or reach the network through its tools. Its environment contains only the Anthropic key.
+`claude --allowedTools Read(//<folder>/**) Glob(//<folder>/**) Grep(//<folder>/**) --model <model> -p <prompt> --output-format stream-json --verbose`.
+Only `Read`, `Glob` and `Grep` are allowed, and each is limited by a permission rule to the run's folder. The rules were tested on Linux with the pinned CLI: reads and searches outside the folder are refused, and so is reading the process's own environment. The agent cannot write files, run commands or reach the network through its tools.
 7. **Take files out of the reply.** The agent cannot write files. It returns a file as a block in its reply, `<file name="plan.md">…</file>`, which the runtime reads after the run. Each good file is sent as a `file` event, and the block is removed from the reply. At most five files per reply; refused files are noted in the reply text. Every prompt begins with these instructions.
 8. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
 9. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
@@ -109,7 +109,8 @@ Rules:
 
 ## Security
 
-- The runtime trusts nothing it receives except the hub's answer to its lease. Its token expires after 15 minutes and works only for its own invocation.
+- The Anthropic key never enters the Claude Code process. A local proxy in the runtime holds it and adds it to each request, and the CLI only sees the proxy's address and a placeholder. The proxy forwards only `/v1/` paths and stops when the run ends.
+- The runtime trusts nothing it receives except the hub's answer to its lease.
 - The GitHub token covers one repository and only reads it. The App's private key is in Secret Manager, never in the image or the environment.
 - The service's account (`agent-runtime`) can read the two secrets and write logs, and nothing else. See [deployment](../deployment.md#34-service-accounts-and-roles).
 - stderr from Claude Code is written to a temporary file, and only its last 300 characters are reported, after redaction.

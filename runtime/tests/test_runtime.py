@@ -117,8 +117,9 @@ def test_stream_lines_are_parsed_and_junk_is_ignored() -> None:
 
 
 def test_claude_is_run_read_only_with_the_prompt_last_before_format_flags() -> None:
-    args = build_claude_args(["claude"], model="claude-haiku-5-5", prompt="hello")
-    assert args[:4] == ["claude", "--allowedTools", "Read", "Glob"]
+    args = build_claude_args(["claude"], model="claude-haiku-5-5", prompt="hello", folder="/tmp/run-x/repo")
+    assert args[:4] == ["claude", "--allowedTools", "Read(//tmp/run-x/repo/**)", "Glob(//tmp/run-x/repo/**)"]
+    assert "Grep(//tmp/run-x/repo/**)" in args
     assert "Bash" not in args and "Edit" not in args and "Write" not in args
     assert args[args.index("--model") + 1] == "claude-haiku-5-5"
     assert args[args.index("-p") + 1] == "hello"
@@ -127,24 +128,26 @@ def test_claude_is_run_read_only_with_the_prompt_last_before_format_flags() -> N
 # ---- the subprocess contract ------------------------------------------------------------------------
 
 
-def test_harness_output_is_streamed_redacted_and_the_key_reaches_only_the_child(tmp_path: Path) -> None:
+def test_the_child_sees_a_placeholder_and_never_the_key(tmp_path: Path) -> None:
     emitted: list[str] = []
     outcome = ClaudeRunner(timeout_seconds=20).run(
         command=_split(_write_fake_harness(tmp_path, SUCCESS_HARNESS)),
         api_key=API_KEY,
+        base_url="http://127.0.0.1:9",
         workdir=str(tmp_path),
         emit_text=emitted.append,
     )
     assert outcome.ok
     assert all(API_KEY not in text for text in emitted)
     assert API_KEY not in outcome.final_text
-    assert any("[redacted]" in text for text in emitted)
+    assert any("held-by-runtime" in text for text in emitted)  # the CLI sees the placeholder, not the key
 
 
 def test_a_harness_error_result_is_reported_as_a_failure(tmp_path: Path) -> None:
     outcome = ClaudeRunner(timeout_seconds=20).run(
         command=_split(_write_fake_harness(tmp_path, ERROR_HARNESS)),
         api_key=API_KEY,
+        base_url="http://127.0.0.1:9",
         workdir=str(tmp_path),
         emit_text=lambda _t: None,
     )
@@ -156,6 +159,7 @@ def test_a_harness_without_a_result_fails_with_its_stderr_tail(tmp_path: Path) -
     outcome = ClaudeRunner(timeout_seconds=20).run(
         command=_split(_write_fake_harness(tmp_path, SILENT_HARNESS)),
         api_key=API_KEY,
+        base_url="http://127.0.0.1:9",
         workdir=str(tmp_path),
         emit_text=lambda _t: None,
     )
@@ -167,6 +171,7 @@ def test_a_slow_harness_is_stopped_at_the_time_limit(tmp_path: Path) -> None:
     outcome = ClaudeRunner(timeout_seconds=1).run(
         command=_split(_write_fake_harness(tmp_path, SLOW_HARNESS)),
         api_key=API_KEY,
+        base_url="http://127.0.0.1:9",
         workdir=str(tmp_path),
         emit_text=lambda _t: None,
     )
@@ -177,6 +182,7 @@ def test_a_missing_binary_is_reported_not_raised(tmp_path: Path) -> None:
     outcome = ClaudeRunner(timeout_seconds=5).run(
         command=["/definitely/not/here/claude"],
         api_key=API_KEY,
+        base_url="http://127.0.0.1:9",
         workdir=str(tmp_path),
         emit_text=lambda _t: None,
     )

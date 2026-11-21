@@ -44,7 +44,8 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 | A run starting for the wrong repository | The hub checks the repository against `GITHUB_ALLOWED_REPOS` and refuses before the lease is used. |
 | A run writing to the repository | The GitHub token has read-only contents access. The agent's tools are limited to `Read`, `Glob` and `Grep`. |
 | A run escaping its workspace | The clone is in a temporary directory, deleted at the end. The run user is not root, and the image has no credentials. |
-| Secrets leaking into logs or chat | Secrets come from Secret Manager at run time. The runtime redacts the key and `sk-ant-…` patterns from output. Logs never include message bodies or credentials. |
+| Secrets leaking into logs or chat | Secrets come from Secret Manager at run time. The Anthropic key is held by the runtime's proxy and never enters the agent's process. The runtime redacts the key and `sk-ant-…` patterns from output. Logs never include message bodies or credentials. |
+| Agent reading or writing outside its folder | Read and search tools are limited by permission rules to the run's folder, tested on Linux with the pinned CLI. Reads and searches outside it are refused. |
 | A runaway agent | Runtime timeout of 25 minutes; the sweeper fails a run after 40 minutes at most, and fails silent runs after 5 minutes. A person can stop a run. |
 | A replayed or duplicated event | Each event has a sequence number, stored once. A finished run refuses further events. |
 | Injection through repository content | The agent's tools are read-only. The agent cannot run commands. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
