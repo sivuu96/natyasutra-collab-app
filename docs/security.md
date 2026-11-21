@@ -48,7 +48,9 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 | Agent reading or writing outside its folder | Read and search tools are limited by permission rules to the run's folder, tested on Linux with the pinned CLI. Reads and searches outside it are refused. |
 | A runaway agent | Runtime timeout of 25 minutes; the sweeper fails a run after 40 minutes at most, and fails silent runs after 5 minutes. A person can stop a run. |
 | A replayed or duplicated event | Each event has a sequence number, stored once. A finished run refuses further events. |
-| Injection through repository content | The agent's tools are read-only. The agent cannot run commands. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
+| Injection through repository content | The agent's tools are read-only and limited to the run's folder. The agent cannot run commands or write files. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
+| Malicious Markdown in a reply | Replies render as Markdown with raw HTML not rendered, images shown as text, links opened in a new tab, and unsafe link targets removed. |
+| Malicious file returned by an agent | Each file is plain text, at most 100 KB, with a safe name. Downloads are attachments with `nosniff`. |
 | Stolen dispatcher key | It can sign requests that run agents, which costs money. Rotate it (see [deployment](deployment.md#5-operating-the-hub)) and keep it only in Render. |
 | A forgotten password | Reset links are random, stored only as a hash, valid for 30 minutes and usable once. A new request cancels older links. The request answer is the same whether or not the account exists. A reset ends every session. |
 | Security headers | Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, a strict referrer policy, and HSTS in production. |
@@ -57,7 +59,7 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 
 - Registration and login create a server-side session. The browser holds an opaque token in a cookie; the hub stores its hash.
 - Sessions end after 24 hours without use or 14 days in total, whichever is first.
-- Logging out ends the session. Setting a password from the operator shell ends every session for that account.
+- Logging out ends the session. Setting a password from the operator shell, or completing an emailed reset, ends every session for that account.
 - Passwords use argon2 through the `argon2-cffi` library. No custom cryptography.
 
 ## 5. Authorisation
@@ -75,7 +77,7 @@ Agent owners can cancel runs on their agents. Session owners are the only people
 
 - **Channels** are visible to every project member.
 - **Private sessions** are visible only to their owner. Other members get 404, not 403, so the session's existence is hidden. Their events are not sent to other members, live or on replay.
-- **Shared sessions** can be read by every project member, and they show a notice to say so. The session's owner and the project's owners can send turns. Only the owner can change visibility or close the session. The creator, project owners and admins can delete it; a deleted session is hidden everywhere, but its rows are kept. Private sessions are visible and writable only to their owner.
+- **Shared sessions** can be read by every project member, and they show a notice to say so. The session's owner and the project's owners can send turns. Only the owner can change visibility. The owner or an admin can close it. The creator, project owners and admins can delete it; a deleted session is hidden everywhere, but its rows are kept. Private sessions are visible and writable only to their owner.
 - **Audit records** never contain message bodies.
 - **Runs** send their events to the hub only. Output text is live-only: it is streamed to the people viewing the session and is not stored, except as the final reply.
 
@@ -84,7 +86,7 @@ The agent's reply is stored in the channel or the session transcript, like any m
 ## 7. Agent safety rules
 
 - An agent runs only when someone asks for it in a project where it is attached. Attaching is the owner's consent for that project.
-- Cloud agents read a copy of one repository and write nothing. They cannot run shell commands, open pull requests or reach the network other than the Anthropic API.
+- Cloud agents read a copy of one repository and write nothing. Their read and search tools are limited to the run's folder. They cannot run shell commands, open pull requests or reach the network other than the Anthropic API, which they reach only through the runtime's proxy.
 - Repositories must be on the allow-list. Adding one is an operator action, and the GitHub App must be installed on it.
 - Agents see only the prompt and the earlier turns of their session. They have no access to other sessions, other channels, or the rest of the hub.
 - Each run is one container. Nothing carries over between runs except the transcript that the hub sends.
@@ -106,12 +108,13 @@ These are known and accepted for a small trusted team. Each must be addressed be
 - **One instance.** The rate limiter, realtime fan-out and execution worker are in-process. Scaling out needs a shared rate-limit store, a message bus for realtime events, and a single leader for the worker.
 - **Dispatch retries.** A run request that reaches the service after a lost response is refused as a duplicate (`409`), because the service remembers which executions are running. A lease that is used a second time is refused as well. See [execution](components/execution.md#cloud-run-service-provider).
 - **Long-lived dispatcher key.** The hub holds a service-account key. Workload identity would remove the key; this needs a platform change.
-- **No outbound network controls on runs.** The runtime service can reach any host, so the agent could in principle send data to a site it finds. Restrict the service's network with egress controls before running untrusted repositories.
+- **No outbound network controls on runs.** The agent's tools cannot reach the network, and the runtime's own connections go only to GitHub, Secret Manager and the Anthropic API. The service still has general network access, so restrict it with egress controls before running untrusted repositories.
+- **Write access for agents is not built.** Agents cannot change repositories. Writing to GitHub would need a separate design (see [Implementation plan](../IMPLEMENTATION_PLAN.md#deferred)).
 - **Prompt injection.** The agent reads repository text and replies to people. A document can try to change the agent's behaviour or its answer. Read-only tools limit the damage, but the agent's replies should be treated as suggestions, not verified facts.
 - **No review of agent replies.** Replies are not checked before they are shown. Anyone reading a reply should check claims that matter.
 - **Free-plan hosting.** Render and Supabase free plans sleep or pause and have no automatic backups. See [deployment](deployment.md#known-limits).
 - **Session memory is capped.** Old turns are dropped from long sessions. This is a functional limit, not a security control.
-- **Passwords and recovery.** There is no self-service password reset. An operator resets it from the shell.
+- **Email dependency.** Password reset depends on Brevo and a verified sender address. If email is not configured, reset requests are refused with a clear message, and operators reset passwords with `scripts.manage set-password`.
 
 ## 11. Reporting a problem
 

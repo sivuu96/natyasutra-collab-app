@@ -74,7 +74,7 @@ Every push to `main` deploys, because `autoDeploy` is on.
 
 Registration is closed in the deployed configuration (`ALLOW_REGISTRATION=false`). Create accounts from the server:
 
-1. In the Render dashboard, open the web service, then **Shell**.
+1. Run it from your own machine, as described in *Running operator commands* below. Render's free plan has no Shell.
 2. Run, once per person:
 
    ```sh
@@ -103,6 +103,19 @@ python -m scripts.manage set-password --email you@example.com
 
 This ends every session for that account.
 
+### Running operator commands
+
+Operator commands (`scripts.manage`, `scripts.create_cloud_agent`) need the production database. Render's free plan has no Shell, so run them from your own machine:
+
+1. Get the `DATABASE_URL` value from Render (**Environment**). It contains the database password: do not paste it into chat or save it in a file.
+2. In PowerShell, in the `backend` folder, run the command in a temporary container, with the URL set for that command only:
+
+```powershell
+docker run -it --rm -e DATABASE_URL="<paste the URL>" -v "<path>ackend:/app" -w /app python:3.11-slim sh -c "pip install -q -r requirements.txt && python -m scripts.manage create-user --email you@example.com --name 'Your Name'"
+```
+
+Use `-it` for commands that ask for a password. The container is removed afterwards. Clear the PowerShell history if the URL was typed there.
+
 ## 3. Google Cloud setup (agent runs)
 
 Agent runs need this section. Without it, a mention stays queued until the sweeper fails it.
@@ -124,7 +137,7 @@ docker build -f runtime/Dockerfile -t us-west1-docker.pkg.dev/<project>/agent-ru
 docker push us-west1-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime:<tag>
 ```
 
-Build from the repository root. Note the image **digest** that `docker push` prints (`sha256:...`). Use the digest when you create or update the service, so it runs exactly the image you tested. A placeholder digest in the command will fail.
+The image includes `poppler-utils`, which the agent's read tool needs for PDFs. Build from the repository root. Note the image **digest** that `docker push` prints (`sha256:...`). Use the digest when you create or update the service, so it runs exactly the image you tested. A placeholder digest in the command will fail.
 
 ### 3.3 Secrets
 
@@ -219,7 +232,7 @@ python -m scripts.create_cloud_agent --email owner@example.com --handle claude -
 python -m scripts.create_cloud_agent --email owner@example.com --handle claude --project-slug <project-slug> --repo owner/name --ref main
 ```
 
-Run it from the Render shell. The first command checks everything and writes nothing. The second creates the agent and attaches it to the project. The owner can then mention `@claude` in a channel or start a session with it.
+Run it from your own machine, as described in *Running operator commands* below. The first command checks everything and writes nothing. The second creates the agent and attaches it to the project. The owner can then mention `@claude` in a channel or start a session with it.
 
 ## 4. Configuration reference
 
@@ -287,5 +300,5 @@ Use `EXECUTION_PROVIDER=fake` here (the default), so no run reaches Google Cloud
 - **One hub instance.** The rate limiter, the realtime fan-out and the execution worker run in process. Two instances would fan out events to only some subscribers and could dispatch a run twice. Scaling out needs a shared store and a message bus first (see [security](security.md#10-known-limitations)).
 - **Capacity.** The service runs one run per instance, with at most three instances. A fourth simultaneous run waits for an instance to free up. If none frees up in time, the dispatch is refused, retried, and then fails after 15 minutes. A run that needs a new instance waits while Cloud Run starts one.
 - **Dispatch retries.** A dispatch that cannot reach the service is retried three times, then the sweeper fails the run after 15 minutes. See [execution](components/execution.md#cloud-run-service-provider).
-- **Sessions have a memory cap.** Earlier turns are replayed up to 40 turns and 20,000 characters. Longer sessions lose their oldest turns. See [backend](components/backend.md#sessions).
+- **Sessions have a memory cap.** Earlier turns are replayed up to 40 turns and 20,000 characters. Longer sessions lose their oldest turns. See [backend](components/backend.md#sessions-servicestranscriptpy).
 - **Free plans sleep.** Render spins down after 15 minutes without traffic, and Supabase pauses after a week. Both need a manual or scheduled wake-up if the team relies on the hub being always available.

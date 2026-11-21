@@ -101,7 +101,7 @@ The runtime runs as a Cloud Run service with one instance kept running (`min-ins
 
 Each run gets its own temporary folder, clone and Claude Code process, and deletes them when it ends. Nothing is kept between runs.
 
-**Continuity between messages.** A follow-up message gets the session's earlier turns in its prompt (see [Backend](backend.md#sessions)), not the Claude Code conversation. Resuming the Claude Code conversation on the same instance is deferred: it needs Cloud Run session affinity so that follow-ups reach the instance holding the conversation. See [Implementation plan](../../IMPLEMENTATION_PLAN.md#deferred).
+**Continuity between messages.** A follow-up message gets the session's earlier turns in its prompt (see [Backend](backend.md#sessions-servicestranscriptpy)), not the Claude Code conversation. Resuming the Claude Code conversation on the same instance is deferred: it needs Cloud Run session affinity so that follow-ups reach the instance holding the conversation. See [Implementation plan](../../IMPLEMENTATION_PLAN.md#deferred).
 
 ## Tests
 

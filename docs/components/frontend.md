@@ -1,77 +1,88 @@
 # Frontend
 
-The frontend is the web app people use. It is a React single-page app (React 19, Vite, TypeScript, Tailwind), built into `frontend/dist` and served by the hub from the same address as the API. Same origin means cookies, CSRF and WebSockets work without extra configuration.
+The frontend is the web app people use. It is a React single-page app, built with Vite and TypeScript, styled with Tailwind. The hub serves the built app from the same address as the API, so cookies and the live connection need no cross-site setup.
 
-Source: `frontend/src/`. Tests: Vitest with Testing Library and jsdom.
+Source: `frontend/`. Build: `npm run build` (type-check, then Vite build). Tests: `npm test` (Vitest).
 
-## Routes
+## Pages and routes
 
 | Route | Page | What it shows |
 |---|---|---|
-| `/login`, `/register` | `LoginPage`, `RegisterPage` | Sign-in and sign-up (sign-up is open only when the hub allows it). |
-| `/` | `ProjectsPage` | Your teams and projects. |
-| `/projects/:id/discussions` | `DiscussionsView` | Channels, messages, the composer, `@` suggestions, agent progress. |
-| `/projects/:id/tasks` | `TasksView` | Tasks: create, change status, assign. |
-| `/projects/:id/decisions` | `DecisionsView` | Decisions with their revisions. |
-| `/forgot-password` | `ForgotPasswordPage` | Asks for an email and sends a reset link. Linked from sign-in. |
-| `/reset-password?token=…` | `ResetPasswordPage` | Sets a new password with a reset link. |
-| `/projects/:id/agents` | `AgentsView` | Agents attached to the project, your agents, and recent runs with Cancel. |
-| `/projects/:id/sessions` | `SessionsView` | Sessions with an agent: transcript, turns, sharing, closing. |
-| `/projects/:id/activity` | `ActivityView` | The project's activity feed. |
-| `/projects/:id/people` | `PeopleView` | Project members and their roles. |
+| `/login` | `LoginPage` | Sign in. Links to registration and "Forgot password?". |
+| `/register` | `RegisterPage` | Create an account, when registration is open. |
+| `/forgot-password` | `ForgotPasswordPage` | Asks for an email and sends a reset link. The answer is the same whether or not the account exists. |
+| `/reset-password?token=…` | `ResetPasswordPage` | Sets a new password with a reset link. Sign-in sessions end after a reset. |
+| `/` | `ProjectsPage` | Teams and projects you belong to. |
+| `/projects/:id/discussions` | `DiscussionsView` | Channels, messages, the composer, `@` suggestions, agent progress, and agent replies rendered as Markdown. |
+| `/projects/:id/tasks` | `TasksView` | Tasks, with status and priority. |
+| `/projects/:id/decisions` | `DecisionsView` | Decisions and their revisions. |
+| `/projects/:id/agents` | `AgentsView` | Agents attached to the project, your agents to offer, and recent runs with their returned files and a Cancel button. |
+| `/projects/:id/sessions` | `SessionsView` | Sessions with an agent: transcript, composer, sharing, closing, deleting, and files. |
+| `/projects/:id/activity` | `ActivityView` | Project activity and the audit log. |
+| `/projects/:id/people` | `PeopleView` | Members, roles, and adding people by email with suggestions. |
 | `/projects/:id/search` | `SearchView` | Search across messages, tasks and decisions. |
 
-`ProjectWorkspace` is the shell for a project: the tabs, the connection status, and the workspace context that every page reads (`project/workspaceContext.tsx`). It provides the current role, `canWrite`, and `subscribe` for live events.
+Every project page sits inside `ProjectWorkspace`, which owns the live connection and gives each page the project and the person's role.
 
-## Talking to the hub
+## Who sees what
 
-- `api/client.ts` wraps `fetch`. It sends cookies, adds the `X-CSRF-Token` header from the `ns_csrf` cookie on writes, and turns error responses into messages. Pages call `api<T>(path, options)`.
-- `api/realtime.ts` opens one WebSocket per project at `/api/v1/ws/projects/{id}?since=<sequence>`. It reconnects with backoff and asks for replay from the last sequence it saw. A close with code 1008 means not authorised, so it stops retrying.
-- `ProjectWorkspace` owns the connection. Pages subscribe to events and refresh the data they show. Agent events refresh the agent and run lists. Message events refresh the channel.
+The page shows only what the hub allows, and the hub enforces every rule again. Hiding a button is never the security boundary.
 
-Types for every API response are in `api/types.ts`. Keep them in step with the backend schemas.
+- **Composer in a session:** shown to the session's owner and to project owners of a shared session. The hub's `can_send` flag decides it.
+- **Delete a session:** shown when the hub's `can_delete` flag is true: the session's creator, a project owner, or a project admin.
+- **Close and sharing buttons:** shown to the session's owner only.
+- **Agent offers and cancel:** the rules in `agents/permissions.ts` mirror the hub's.
 
-## Mentions and `@` suggestions (`discussions/mentions.ts`)
+## Agent replies
 
-Typing `@` in the composer opens a list of people and agents in the project. The list is built from the attached agents and the members.
+Agent replies are shown as Markdown (`components/Markdown.tsx`), in sessions and in channels. Bold, italics, headings, lists, tables, quotes and code render as formatting, not as symbols.
 
-- `activeMention(text, caret)` finds the `@` word the caret is in, if any.
+- Raw HTML in a reply is not rendered.
+- Images show as their alt text, so a reply cannot load a remote picture.
+- Links open in a new tab, and unsafe link targets such as `javascript:` are removed.
+
+Messages from people are shown as plain text, with mentions highlighted.
+
+## Files from runs
+
+When a run returns files, they appear as download links under the reply (`components/RunFiles.tsx`), and in the recent runs list. Each link goes to `/api/v1/projects/…/invocations/…/files/…`, which the hub sends as a plain-text attachment.
+
+## Live updates
+
+`ProjectWorkspace` opens one WebSocket per project (`api/realtime.ts`). It reconnects with a backoff, sends its last sequence number so the hub can replay what it missed, and shows a notice if the hub refuses the connection.
+
+Pages subscribe to events and refresh what they show:
+- Agent events refresh the agent and run lists.
+- Message events refresh the channel.
+- Session events refresh the session list and the open transcript.
+- Streamed agent text (`agent.output.delta`) is shown as it arrives, in `sessions/streaming.ts`, and replaced by the saved reply when it lands.
+
+## Mentions
+
+Typing `@` in the composer opens a list of people and agents in the project (`discussions/mentions.ts`). The list is built from the attached agents and the members.
+
+- `activeMention` finds the `@` being typed at the caret.
 - `suggestMentions(candidates, query)` ranks agents first, then people, by handle prefix. It returns at most six entries.
-- `applyMention` replaces the word with `@handle`, adds a space only when none follows, and moves the caret after it.
+- `applyMention` inserts the chosen handle.
 
-Keyboard: arrow keys move through the list, Enter or Tab picks, Escape closes it. Mentions do not notify anyone yet.
+While an agent works, a progress line appears above the message box (`discussions/runProgress.ts`): `@claude: Queued…`, then the stage the runtime reports. Each line has a Stop button.
 
-## Agent progress (`discussions/runProgress.ts`)
+## Project data and state
 
-Files an agent returns appear as download links under its reply (sessions) and in the recent runs list (agents). Each link opens the file as a plain-text attachment.
-
-While an agent works, a progress line appears above the message box: `@claude: Queued…`, then the stage the runtime reports (for example `Preparing the repository…`, `Running the agent…`, `Writing the reply…`). Each line has a Stop button.
-
-- `applyRunEvent(state, event)` turns `agent.invocation.created`, `agent.invocation.progress`, and the final events into the map of active runs. Final events remove the run.
-- `activeRuns(state, now)` hides a run that has not reported for six minutes. The page refreshes `now` every 30 seconds, so a run that stopped reporting disappears on its own. The hub also fails such a run; see [Execution](execution.md).
-- The Stop button calls `POST /projects/{id}/invocations/{id}/cancel`.
-
-## Sessions (`pages/SessionsView.tsx`)
-
-The left column lists the sessions you can see, and the new-session form creates one with a chosen agent, a title, and a visibility. The centre shows the transcript, streaming text while the agent replies, and the composer for people who can send. Members of a shared session can read the transcript and watch it live. The composer is shown to the session's owner and to project owners; other members see the transcript only. The right column explains how sessions work. The Delete button shows for a session's creator, and for project owners and admins; deleting asks for confirmation.
-
-A session accepts one turn at a time. The page disables the composer while a turn is active, and it shows a Cancel turn button for the active run.
+- `project/workspaceContext.tsx` provides the project, the person's role, and helpers such as `canWrite`.
+- `auth/AuthContext.tsx` holds the signed-in user and the sign-in and sign-out actions.
+- `api/client.ts` makes the requests. It sends the cookie, echoes the CSRF token on writes, and turns error responses into readable messages. `runFileUrl` builds the download address for a run's file.
+- `api/types.ts` has the shapes the API returns, such as `AgentSession` (with `can_send` and `can_delete`), `Invocation` (with `files`) and `SessionMessage`.
 
 ## Components
 
-`components/ui.tsx` holds the shared controls: `Button`, `Card`, `Input`, `TextArea` (it forwards refs, so the composer can be focused), `Select`, `Label`, `EmptyState`, `ErrorText`, `formatTime` and `errorMessage`. Use these rather than writing new styles.
-
-## Permissions in the UI
-
-`agents/permissions.ts` mirrors the hub's agent rules so the UI can hide buttons that would fail: who may offer an agent to a project, and who may cancel a run. The hub enforces every rule again. Hiding a button is never the security boundary.
+| File | Purpose |
+|---|---|
+| `components/ui.tsx` | Buttons, cards, inputs, labels, errors, and time formatting. |
+| `components/Markdown.tsx` | Renders an agent's reply as safe Markdown. |
+| `components/RunFiles.tsx` | Download links for a run's returned files. |
 
 ## Tests
 
-```powershell
-cd frontend
-npm test              # Vitest
-npx tsc --noEmit -p . # type check
-npm run build         # type check and production bundle
-```
-
-Tests cover the API client, the realtime client, the login flow, mention ranking and insertion, run progress, the session stream, and the progress line on the discussions page.
+- `frontend/src/**/*.test.ts(x)` cover the mention rules, run progress, streaming text, the permission rules, the client, the realtime connection, and the login and progress flows.
+- These tests do not run on Node 26 with Vitest 4 yet (a known issue; use Node 22 LTS). The type check (`npx tsc --noEmit`) and the production build do run.

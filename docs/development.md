@@ -28,6 +28,12 @@ Local runs use `EXECUTION_PROVIDER=fake`, which records agent runs without start
 
 Use the **Windows** Python 3.11 installation. The MSYS2 Python has a MinGW build tag that cannot install the `pydantic-core` or `psycopg[binary]` wheels.
 
+If Windows Smart App Control is on, it can block the `pydantic_core` library in a local virtual environment, and the tests fail to start. Run the backend suite in a container instead:
+
+```powershell
+docker run --rm -v "<path>ackend:/app" -w /app python:3.11-slim sh -c "pip install -q -r requirements-dev.txt && pytest -q"
+```
+
 ```powershell
 cd backend
 py -3.11 -m venv .venv
@@ -92,6 +98,7 @@ Migrations are PostgreSQL-first. Constraint names must be wrapped in `op.f(...)`
 | `c5d6e7f8a9b0` | Files an agent returned in its reply, kept with the run. Reversible: drops the table. |
 | `e7f8a9b0c1d2` | Password reset links: only a hash of each token is stored. Reversible: drops the table. |
 | `f8a9b0c1d2e3` | Session deletion: a `deleted_at` marker; the rows are kept. Reversible: drops the column. |
+| `a0b1c2d3e4f5` | Drops two columns nothing read: a run's result-message link and a session's closed-at time. Reversible: restores the empty columns. |
 
 The bridge migration was checked on PostgreSQL 16: it refused with a device-backed agent present, ran after that agent was removed, and `alembic check` reported no drift. The latest migration was checked the same way: upgrade, downgrade, upgrade, then `alembic check`, with no drift.
 
@@ -121,8 +128,8 @@ With `EXECUTION_PROVIDER=fake`, a mention or session turn is queued, and the wor
 
 ```powershell
 cd runtime
-..\backend\.venv\Scripts\python.exe -m pip install -r requirements.txt   # once: httpx, pyjwt, cryptography, Secret Manager client
-..\backend\.venv\Scripts\python.exe -m pytest -q
+python -m pip install -r requirements.txt   # once: httpx, pyjwt, cryptography, Secret Manager client
+python -m pytest -q
 ```
 
 The tests use a fake hub and a fake harness script, so they need no network and no Anthropic key.
@@ -133,7 +140,9 @@ To build the image locally, from the repository root:
 docker build -f runtime/Dockerfile -t collab-agent-runtime:local .
 ```
 
-## Frontend (Node 22 LTS or newer)
+## Frontend (Node 22 LTS)
+
+Use Node 22 LTS. Node 26 breaks the Vitest suite (its test setup fails before any test runs). The type check and the build work on either.
 
 ```powershell
 cd frontend

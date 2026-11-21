@@ -1,8 +1,10 @@
 # Runtime
 
-The runtime is the service that performs agent runs. It runs as a Cloud Run service with one warm instance. The hub sends it one invocation at a time; the runtime does the work, reports to the hub, and returns. It has no credentials of its own: it gets a one-use lease from the hub with each request, reads its secrets from Google Secret Manager, and sends everything it does back to the hub as events.
+The runtime is the service that performs agent runs. It runs as a Cloud Run service with one warm instance. The hub sends it one invocation at a time; the runtime does the work, reports to the hub, and returns. It holds no credentials of its own: it gets a one-use lease from the hub with each request, reads its secrets from Google Secret Manager, and sends everything it does back to the hub as events.
 
 Source: `runtime/`. Image: `runtime/Dockerfile`. Python package: `runtime/collab_runtime/`. Tests: `runtime/tests/`.
+
+For the whole flow in pictures, including what the agent sees, see [Architecture](../architecture.md#7-the-runtime-service-step-by-step).
 
 ## What is in the image
 
@@ -10,13 +12,14 @@ Source: `runtime/`. Image: `runtime/Dockerfile`. Python package: `runtime/collab
 |---|---|
 | Base | `node:22-bookworm-slim` |
 | Agent | Claude Code CLI, pinned by `ARG CLAUDE_CODE_VERSION` (currently `2.1.322`). Upgrade on purpose, after reading the release notes. |
+| PDF rendering | `poppler-utils`. The CLI's read tool uses its `pdftoppm` program to read PDF pages. |
 | Tools | Python 3 in a virtual environment (`httpx`, `pyjwt`, `cryptography`, `google-cloud-secret-manager`), `git`, `ca-certificates` |
 | User | `runner` (uid 10001), no login shell. The image holds no secrets. |
 | Entry point | `python3 -m collab_runtime`, which starts the HTTP service on `$PORT` |
 
 Build from the repository root, so the image contains `runtime/`:
 
-```powershell
+```
 docker build -f runtime/Dockerfile -t <region>-docker.pkg.dev/<project>/agent-runtime/collab-agent-runtime:<tag> .
 ```
 
@@ -54,18 +57,23 @@ The service gets these from its environment. The hub sends the per-run values in
 2. **Exchange the lease** with `POST /api/v1/internal/executions/exchange`, giving the execution name. The hub returns the prompt, the agent's handle, the repository and branch, and a runtime token. For a session turn it also returns the session ID, the new message and the previous turn's ID. If the hub refuses, the run stops with exit code 3 (see [Execution](execution.md#one-use-run-leases)).
 3. **Report `started`.** If the harness is not supported, report `failed` and stop.
 4. **Read the Anthropic key** from Secret Manager. If that fails, report `failed` (`secret_unavailable`). The run never continues without its key.
-5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository with read-only contents access, and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary directory that is deleted when the run ends.
-6. **Run Claude Code** in the clone:
-`claude --allowedTools Read(//<folder>/**) Glob(//<folder>/**) Grep(//<folder>/**) --model <model> -p <prompt> --output-format stream-json --verbose`.
-Only `Read`, `Glob` and `Grep` are allowed, and each is limited by a permission rule to the run's folder. The rules were tested on Linux with the pinned CLI: reads and searches outside the folder are refused, and so is reading the process's own environment. The agent cannot write files, run commands or reach the network through its tools.
-7. **Take files out of the reply.** The agent cannot write files. It returns a file as a block in its reply, `<file name="plan.md">…</file>`, which the runtime reads after the run. Each good file is sent as a `file` event, and the block is removed from the reply. At most five files per reply; refused files are noted in the reply text. Every prompt begins with these instructions.
+5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository with read-only contents access, and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary folder that is deleted when the run ends.
+6. **Start the model proxy.** A local proxy starts on 127.0.0.1 on a random port, holding the Anthropic key. The Claude Code process is given only the proxy's address and a placeholder. See [Architecture](../architecture.md#8-the-model-proxy).
+7. **Run Claude Code** in the clone:
+   `claude --allowedTools Read(//<folder>/**) Glob(//<folder>/**) Grep(//<folder>/**) --model <model> -p <prompt> --output-format stream-json --verbose`.
+   The read and search tools are limited to the run's folder by permission rules. There are no write, edit or shell tools. The rules were tested on Linux with the pinned CLI: reads and searches outside the folder are refused, and so is reading the process's own environment.
 8. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
-9. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
-10. **Delete the temporary directory** and return the response.
+9. **Take files out of the reply.** The agent cannot write files. It returns a file as a block in its reply, `<file name="plan.md">…</file>`. The runtime sends each good file as a `file` event and removes the block from the reply. At most five files per reply, each at most 100 KB, with names of letters, digits, dots, dashes and underscores. Refused files are noted in the reply text.
+10. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
+11. **Stop the proxy and delete the temporary folder.** The proxy forgets the key.
 
 The runtime sends a heartbeat every 30 seconds while the agent runs. A run that exceeds `RUN_TIMEOUT_SECONDS` is stopped. If the hub cancels the run, the runtime stops Claude Code at its next heartbeat.
 
 Each run logs `timing stage=<name> ms=<n>` lines, measured from the start of the run: `start`, `exchanged`, `secret_read`, `repo_ready`, `agent_started`, `first_output`, `agent_finished` and `completed`. They are in the service's Cloud Logging entries.
+
+### Prompt the agent receives
+
+Every prompt begins with the file instructions: the agent cannot write files, returns files as `<file name="…">` blocks, must read PDFs longer than 20 pages in ranges of at most 20 pages, and must treat earlier conversation as history. Then comes the repository note if the repository is empty, then the message. For a session turn, the message is preceded by the earlier turns. The full layout is in [Architecture](../architecture.md#9-what-the-claude-code-process-sees).
 
 ### Response codes
 
@@ -94,7 +102,7 @@ Each event goes to `POST /api/v1/internal/executions/events` with the runtime to
 | `progress` | `text` | Shows a stage line above the message box. Not stored. |
 | `heartbeat` | | Keeps the run alive for the sweeper. |
 | `output` | `text` | Streams text to the viewers. Not stored. |
-| `file` | `name`, `content` | Keeps a text file the agent returned. Sent before the reply. Not shown as a message. |
+| `file` | `name`, `content` | Keeps a text file the agent returned, up to five per run. Sent before the reply. Not shown as a message. |
 | `message` | `text` | Saves the reply: a channel message, or a session transcript entry. |
 | `completed` | | Marks the run completed. |
 | `failed` | `code`, `message` | Marks the run failed, with the code and message shown to the user. |
@@ -103,14 +111,14 @@ Rules:
 
 - `sequence` starts at 0 and counts up by one. The hub stores each sequence number once, so a retried event is recognised and answered with `{"duplicate": true}`.
 - A run that is already finished refuses further events, so a late event cannot change its result.
-- Text is limited to 20,000 characters per event, and failure messages to 500.
-- A file's name may use letters, digits, dots, dashes and underscores, starting with a letter or digit, up to 120 characters. Its content is at most 100 KB.
+- Text is limited to 20,000 characters per event, failure messages to 500, and a file's content to 100,000 characters.
 - The runtime removes the Anthropic key from memory once the harness has finished, and it redacts the key and `sk-ant-…` patterns from anything it sends.
 
 ## Security
 
-- The Anthropic key never enters the Claude Code process. A local proxy in the runtime holds it and adds it to each request, and the CLI only sees the proxy's address and a placeholder. The proxy forwards only `/v1/` paths and stops when the run ends.
-- The runtime trusts nothing it receives except the hub's answer to its lease.
+- The Anthropic key never enters the Claude Code process. The proxy holds it and adds it to each request. The CLI sees only the proxy's address and a placeholder. The proxy forwards only `/v1/` paths and stops when the run ends.
+- The agent can read and search only its run folder, and it cannot write. Only the proxy can reach the network, and only the Anthropic API.
+- The runtime trusts nothing it receives except the hub's answer to its lease. Its token expires after 15 minutes and works only for its own invocation.
 - The GitHub token covers one repository and only reads it. The App's private key is in Secret Manager, never in the image or the environment.
 - The service's account (`agent-runtime`) can read the two secrets and write logs, and nothing else. See [deployment](../deployment.md#34-service-accounts-and-roles).
 - stderr from Claude Code is written to a temporary file, and only its last 300 characters are reported, after redaction.
@@ -119,15 +127,16 @@ Rules:
 
 - One request is one run. The clone is shallow, and the working copy is deleted at the end.
 - A run is cut off if Cloud Run stops its instance in the middle of it. The runtime does not handle that signal. The hub's sweeper fails the run after about 5 minutes without a heartbeat.
-- The agent has no memory between runs. Sessions give it earlier turns in the prompt; see [Backend](backend.md#sessions).
+- The agent has no memory between runs. Sessions give it earlier turns in the prompt; see [Backend](backend.md#sessions-servicestranscriptpy).
 - The agent cannot change the repository, open pull requests, or use the network beyond the Anthropic API.
+- Scanned PDFs have no text layer, and poppler does not run OCR. Whether the agent can read such pages is not verified.
 - Only `claude_code` is supported. Any other harness reports `unsupported_harness`.
 
 ## Tests
 
-```powershell
+```
 cd runtime
-..\backend\.venv\Scripts\python.exe -m pytest -q
+python -m pytest -q
 ```
 
-The tests use a fake hub and a fake Claude Code binary. They cover the exchange, event ordering and the duplicate answer, redaction, cancellation stopping the agent, timeouts, missing secrets, the repository checks, the command line passed to Claude Code, and the HTTP service's requests, including the duplicate refusal and the rule that request bodies are never logged.
+The tests use a fake hub and a fake Claude Code binary, and a stand-in upstream for the proxy. They cover the exchange, event ordering and the duplicate answer, redaction, cancellation, timeouts, missing secrets, the repository checks, the command line and tool rules passed to Claude Code, the proxy (key added, placeholder dropped, `/v1/` only, no key in replies), the reply files and their limits, and the HTTP service's requests.
