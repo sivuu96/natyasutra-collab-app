@@ -147,3 +147,62 @@ def test_my_agents_lists_only_the_agents_you_own(world: dict[str, Any]) -> None:
     assert owned.status_code == 200, owned.text
     assert [a["handle"] for a in owned.json()] == [HANDLE]
     assert world["member"].get(f"{API}/me/agents").json() == []
+
+
+def _member_shares_a_session(w: dict[str, Any], visibility: str = "project") -> dict[str, Any]:
+    response = w["member"].post(
+        f"{API}/projects/{w['pid']}/sessions",
+        json={"agent_id": w["agent_id"], "title": "Member's chat", "visibility": visibility},
+        headers=csrf_headers(w["member"]),
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_a_project_owner_can_send_in_a_shared_session_someone_else_started(world: dict[str, Any]) -> None:
+    session = _member_shares_a_session(world)
+
+    response = send_turn(world["owner"], world, session["id"], "Owner follow-up.")
+
+    assert response.status_code == 201, response.text
+    with world["app"].state.session_factory() as db:
+        invocation = db.get(AgentInvocation, uuid.UUID(response.json()["invocation_id"]))
+        assert invocation is not None and invocation.requested_by_user_id is not None
+    listed = world["owner"].get(f"{API}/projects/{world['pid']}/sessions").json()
+    seen = next(item for item in listed if item["id"] == session["id"])
+    assert seen["is_owner"] is False
+    assert seen["can_send"] is True
+
+
+def test_the_session_starter_keeps_sending_and_other_members_still_cannot(
+    world: dict[str, Any], client_factory: Callable[[], TestClient]
+) -> None:
+    session = _member_shares_a_session(world)
+    assert send_turn(world["member"], world, session["id"], "Starter.").status_code == 201
+
+    bystander = client_factory()
+    register(bystander, "session-bystander@example.com", "Bystander")
+    add_member(world["owner"], world["pid"], "session-bystander@example.com", role="member")
+
+    assert send_turn(bystander, world, session["id"], "Can I?").status_code == 403
+    listed = bystander.get(f"{API}/projects/{world['pid']}/sessions").json()
+    seen = next(item for item in listed if item["id"] == session["id"])
+    assert seen["can_send"] is False
+
+
+def test_a_project_admin_cannot_send_in_someone_elses_shared_session(
+    world: dict[str, Any], client_factory: Callable[[], TestClient]
+) -> None:
+    session = _member_shares_a_session(world)
+    admin = client_factory()
+    register(admin, "session-admin@example.com", "Admin")
+    add_member(world["owner"], world["pid"], "session-admin@example.com", role="admin")
+
+    assert send_turn(admin, world, session["id"], "Admin here.").status_code == 403
+
+
+def test_a_project_owner_cannot_see_or_send_in_someone_elses_private_session(world: dict[str, Any]) -> None:
+    session = _member_shares_a_session(world, visibility="private")
+
+    assert world["owner"].get(f"{API}/projects/{world['pid']}/sessions/{session['id']}").status_code == 404
+    assert send_turn(world["owner"], world, session["id"], "Hello?").status_code == 404

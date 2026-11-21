@@ -74,7 +74,7 @@ Agent owners can cancel runs on their agents. Session owners are the only people
 
 - **Channels** are visible to every project member.
 - **Private sessions** are visible only to their owner. Other members get 404, not 403, so the session's existence is hidden. Their events are not sent to other members, live or on replay.
-- **Shared sessions** can be read by every project member, and they show a notice to say so. Only the owner can send turns or change visibility.
+- **Shared sessions** can be read by every project member, and they show a notice to say so. The session's owner and the project's owners can send turns. Only the owner can change visibility or close the session. Private sessions are visible and writable only to their owner.
 - **Audit records** never contain message bodies.
 - **Runs** send their events to the hub only. Output text is live-only: it is streamed to the people viewing the session and is not stored, except as the final reply.
 

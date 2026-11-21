@@ -22,7 +22,7 @@ from app.models.enums import TERMINAL_INVOCATION_STATUSES, ProjectRole, SessionS
 from app.realtime.hub import hub
 from app.services.agents import Outcome, apply_outcome, create_session_turn
 from app.services.audit import record_audit
-from app.services.authz import ROLE_RANK, load_project_for
+from app.services.authz import ROLE_RANK, get_membership, load_project_for
 from app.services.events import record_event
 from app.services.files import files_by_invocation
 
@@ -56,6 +56,7 @@ class SessionOut(BaseModel):
     owner_user_id: uuid.UUID
     owner_display_name: str
     is_owner: bool
+    can_send: bool
     last_activity_at: Any
     created_at: Any
 
@@ -99,6 +100,7 @@ def _session_out(db: Session, session: AgentSession, user: User) -> SessionOut:
         owner_user_id=session.owner_user_id,
         owner_display_name=_owner_name(db, session),
         is_owner=session.owner_user_id == user.id,
+        can_send=_can_send(db, user, session),
         last_activity_at=session.last_activity_at,
         created_at=session.created_at,
     )
@@ -115,6 +117,16 @@ def _visible_session(db: Session, user: User, project_id: uuid.UUID, session_id:
     if session is None or not _can_see(session, user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return session
+
+
+def _can_send(db: Session, user: User, session: AgentSession) -> bool:
+    """Who may send turns: the session's owner, and, for a shared session, the project's owners."""
+    if session.owner_user_id == user.id:
+        return True
+    if session.visibility != SessionVisibility.PROJECT.value:
+        return False
+    membership = get_membership(db, user, session.project_id)
+    return membership is not None and membership.role == ProjectRole.OWNER.value
 
 
 def _owned_session(db: Session, user: User, project_id: uuid.UUID, session_id: uuid.UUID) -> AgentSession:
@@ -257,7 +269,12 @@ def post_turn(
     db: Session = Depends(get_db),
 ) -> TurnOut:
     load_project_for(db, user, project_id, ProjectRole.MEMBER)
-    session = _owned_session(db, user, project_id, session_id)
+    session = _visible_session(db, user, project_id, session_id)
+    if not _can_send(db, user, session):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the session owner or a project owner can send messages here",
+        )
     if session.status != SessionStatus.ACTIVE.value:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This session is closed")
     busy = db.scalar(

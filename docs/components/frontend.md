@@ -53,7 +53,7 @@ While an agent works, a progress line appears above the message box: `@claude: Q
 
 ## Sessions (`pages/SessionsView.tsx`)
 
-The left column lists the sessions you can see, and the new-session form creates one with a chosen agent, a title, and a visibility. The centre shows the transcript, streaming text while the agent replies, and the composer for the owner. Members of a shared session can read the transcript and watch it live, but the composer is hidden for them. The right column explains how sessions work.
+The left column lists the sessions you can see, and the new-session form creates one with a chosen agent, a title, and a visibility. The centre shows the transcript, streaming text while the agent replies, and the composer for people who can send. Members of a shared session can read the transcript and watch it live. The composer is shown to the session's owner and to project owners; other members see the transcript only. The right column explains how sessions work.
 
 A session accepts one turn at a time. The page disables the composer while a turn is active, and it shows a Cancel turn button for the active run.
 

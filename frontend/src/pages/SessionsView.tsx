@@ -81,7 +81,7 @@ export function SessionsView() {
   // Requests are already filtered to this session; the newest one is the current turn.
   const latestTurn = requests[0];
   const busy = latestTurn ? isActive(latestTurn.status) : false;
-  const canSend = !!selected && selected.is_owner && selected.status === "active" && !busy && canWrite;
+  const canSend = !!selected && selected.can_send && selected.status === "active" && !busy && canWrite;
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -277,7 +277,7 @@ export function SessionsView() {
                 )}
               </div>
             )}
-            {selected.is_owner && selected.status === "active" ? (
+            {selected.can_send && selected.status === "active" ? (
               <form onSubmit={send} className="space-y-2">
                 <Label htmlFor="session-composer">Message the agent</Label>
                 <TextArea id="session-composer" rows={3} maxLength={10000} value={draft}
@@ -292,7 +292,7 @@ export function SessionsView() {
               <p className="text-sm text-stone-500">
                 {selected.status === "closed"
                   ? "This session is closed."
-                  : "Only the session owner can send messages. You can read the transcript."}
+                  : "Only the session owner and project owners can send messages here. You can read the transcript."}
               </p>
             )}
           </>

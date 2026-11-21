@@ -98,6 +98,8 @@ Every project route calls `load_project_for` (`app/services/authz.py`), which ch
 
 A session's turns run one at a time. The turn route checks for an active invocation in the session before it creates one.
 
+Who may send a turn: the session's owner, and for a shared (project) session, any project owner. Project admins and other members cannot. The session list's `can_send` flag tells the frontend which composers to show.
+
 Each run carries the session's earlier turns, because the runtime keeps nothing between runs and cannot resume a previous Claude session. `services/transcript.py` builds that prompt when the run's lease is exchanged:
 
 - The newest transcript row is this turn's own message. It is left out of the history and sent last, as the new message.
