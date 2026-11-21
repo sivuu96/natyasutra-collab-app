@@ -28,7 +28,9 @@ INSTRUCTIONS = (
     "</file>\n"
     "Names may use only letters, digits, dots, dashes and underscores, for example plan.md. Give at most five files, "
     "each under 100 KB. Outside the blocks, briefly tell the user what each file contains. Do not use these blocks "
-    "unless the user asked for a file."
+    "unless the user asked for a file.\n\n"
+    "To read a PDF, use the Read tool. A PDF longer than 20 pages must be read in page ranges of at most 20 pages, "
+    "for example pages 1-20, then 21-40."
 )
 
 
