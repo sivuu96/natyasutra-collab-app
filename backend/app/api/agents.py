@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.schemas import RunFileOut
@@ -38,8 +38,10 @@ def _session_visible(user: User):  # type: ignore[no-untyped-def]
     """Channel runs are always visible; session runs only if the session is shared or yours."""
     return or_(
         AgentInvocation.session_id.is_(None),
-        AgentSession.visibility == "project",
-        AgentSession.owner_user_id == user.id,
+        and_(
+            AgentSession.deleted_at.is_(None),
+            or_(AgentSession.visibility == "project", AgentSession.owner_user_id == user.id),
+        ),
     )
 
 

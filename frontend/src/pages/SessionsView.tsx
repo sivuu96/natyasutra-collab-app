@@ -140,6 +140,18 @@ export function SessionsView() {
     }
   }
 
+  async function remove() {
+    if (!selected || !window.confirm("Delete this session? Its conversation will no longer be shown to anyone.")) return;
+    setError(null);
+    try {
+      await api<void>(`/projects/${project.id}/sessions/${selected.id}`, { method: "DELETE" });
+      setSelectedId(null);
+      await loadSessions();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  }
+
   async function close() {
     if (!selected || !window.confirm("Close this session? No more turns can be sent.")) return;
     setError(null);
@@ -232,16 +244,25 @@ export function SessionsView() {
                   {selected.status === "closed" ? " · closed" : ""}
                 </p>
               </div>
-              {selected.is_owner && selected.status === "active" && (
+              {(selected.is_owner && selected.status === "active") || selected.can_delete ? (
                 <div className="flex gap-2">
-                  <Button variant="secondary" onClick={() => void setVisibility(selected.visibility === "private" ? "project" : "private")}>
-                    {selected.visibility === "private" ? "Share with project" : "Make private"}
-                  </Button>
-                  <Button variant="ghost" onClick={() => void close()}>
-                    Close
-                  </Button>
+                  {selected.is_owner && selected.status === "active" && (
+                    <Button variant="secondary" onClick={() => void setVisibility(selected.visibility === "private" ? "project" : "private")}>
+                      {selected.visibility === "private" ? "Share with project" : "Make private"}
+                    </Button>
+                  )}
+                  {selected.is_owner && selected.status === "active" && (
+                    <Button variant="ghost" onClick={() => void close()}>
+                      Close
+                    </Button>
+                  )}
+                  {selected.can_delete && (
+                    <Button variant="ghost" onClick={() => void remove()}>
+                      Delete
+                    </Button>
+                  )}
                 </div>
-              )}
+              ) : null}
             </div>
             {selected.visibility === "project" && (
               <p className="text-xs text-stone-500">Shared: every project member can read this transcript and watch it live.</p>

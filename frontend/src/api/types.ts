@@ -173,6 +173,7 @@ export interface AgentSession {
   owner_display_name: string;
   is_owner: boolean;
   can_send: boolean;
+  can_delete: boolean;
   last_activity_at: string | null;
   created_at: string;
 }

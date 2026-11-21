@@ -31,7 +31,7 @@ def load_run_file(
         raise _not_found()
     if invocation.session_id is not None:
         session = db.get(AgentSession, invocation.session_id)
-        visible = session is not None and (
+        visible = session is not None and session.deleted_at is None and (
             session.owner_user_id == user.id or session.visibility == SessionVisibility.PROJECT.value
         )
         if not visible:

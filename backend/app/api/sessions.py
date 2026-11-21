@@ -9,7 +9,7 @@ Visibility rules (enforced here, and again on every realtime delivery):
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -57,6 +57,7 @@ class SessionOut(BaseModel):
     owner_display_name: str
     is_owner: bool
     can_send: bool
+    can_delete: bool
     last_activity_at: Any
     created_at: Any
 
@@ -101,6 +102,7 @@ def _session_out(db: Session, session: AgentSession, user: User) -> SessionOut:
         owner_display_name=_owner_name(db, session),
         is_owner=session.owner_user_id == user.id,
         can_send=_can_send(db, user, session),
+        can_delete=_can_delete(db, user, session),
         last_activity_at=session.last_activity_at,
         created_at=session.created_at,
     )
@@ -110,9 +112,21 @@ def _can_see(session: AgentSession, user: User) -> bool:
     return session.owner_user_id == user.id or session.visibility == SessionVisibility.PROJECT.value
 
 
+def _can_delete(db: Session, user: User, session: AgentSession) -> bool:
+    """The session's creator, and any project owner or admin, may delete a session."""
+    if session.owner_user_id == user.id:
+        return True
+    membership = get_membership(db, user, session.project_id)
+    return membership is not None and membership.role in (ProjectRole.OWNER.value, ProjectRole.ADMIN.value)
+
+
 def _visible_session(db: Session, user: User, project_id: uuid.UUID, session_id: uuid.UUID) -> AgentSession:
     session = db.scalar(
-        select(AgentSession).where(AgentSession.id == session_id, AgentSession.project_id == project_id)
+        select(AgentSession).where(
+            AgentSession.id == session_id,
+            AgentSession.project_id == project_id,
+            AgentSession.deleted_at.is_(None),
+        )
     )
     if session is None or not _can_see(session, user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -198,6 +212,7 @@ def list_sessions(
         select(AgentSession)
         .where(
             AgentSession.project_id == project_id,
+            AgentSession.deleted_at.is_(None),
             or_(AgentSession.owner_user_id == user.id, AgentSession.visibility == SessionVisibility.PROJECT.value),
         )
         .order_by(AgentSession.created_at.desc())
@@ -349,6 +364,67 @@ def set_visibility(
     db.refresh(session)
     hub.publish(project_id, envelope)
     return _session_out(db, session, user)
+
+
+@router.delete("/projects/{project_id}/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_session(
+    project_id: uuid.UUID,
+    session_id: uuid.UUID,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Delete a session. Its creator, a project owner or a project admin may do this, even for a private session."""
+    load_project_for(db, user, project_id, ProjectRole.MEMBER)
+    session = db.scalar(
+        select(AgentSession).where(
+            AgentSession.id == session_id,
+            AgentSession.project_id == project_id,
+            AgentSession.deleted_at.is_(None),
+        )
+    )
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    if not _can_delete(db, user, session):
+        if not _can_see(session, user):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the session's creator, a project owner or an admin can delete it",
+        )
+    busy = db.scalar(
+        select(AgentInvocation.id).where(
+            AgentInvocation.session_id == session.id,
+            AgentInvocation.status.notin_(list(TERMINAL_VALUES)),
+        )
+    )
+    if busy is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Wait for the current turn to finish")
+
+    session.deleted_at = utcnow()
+    envelope = record_event(
+        db,
+        project_id=project_id,
+        event_type="session.deleted",
+        actor_user_id=user.id,
+        payload={
+            "session_id": str(session.id),
+            "visibility": session.visibility,
+            "owner_user_id": str(session.owner_user_id),
+        },
+    )
+    record_audit(
+        db,
+        action="session.deleted",
+        actor_user_id=user.id,
+        project_id=project_id,
+        target_type="agent_session",
+        target_id=str(session.id),
+        request_id=_req_id(request),
+    )
+    db.commit()
+    hub.publish(project_id, envelope)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/projects/{project_id}/sessions/{session_id}/close", response_model=SessionOut)

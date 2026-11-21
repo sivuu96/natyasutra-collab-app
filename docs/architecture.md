@@ -86,7 +86,7 @@ PostgreSQL (SQLite in development and tests) holds:
 | Agents | `agents`, `project_agents`, `agent_invocations`, `invocation_files`, `agent_sessions`, `agent_session_messages` |
 | Runs | `execution_outbox`, `invocation_leases`, `run_events` |
 
-Migrations are in `backend/migrations/versions/`. The current head is `e7f8a9b0c1d2`.
+Migrations are in `backend/migrations/versions/`. The current head is `f8a9b0c1d2e3`.
 
 ## 7. Where things run
 

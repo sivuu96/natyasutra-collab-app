@@ -100,6 +100,8 @@ A session's turns run one at a time. The turn route checks for an active invocat
 
 Who may send a turn: the session's owner, and for a shared (project) session, any project owner. Project admins and other members cannot. The session list's `can_send` flag tells the frontend which composers to show.
 
+Deleting a session (`DELETE /projects/{id}/sessions/{session}`) is a soft delete: `deleted_at` is set, and the session disappears from lists, pages, runs and downloads. Its creator, any project owner, and any project admin may delete it, including a private session. Deletion is refused while a turn is running. The `can_delete` flag tells the frontend whether to show the Delete button.
+
 Each run carries the session's earlier turns, because the runtime keeps nothing between runs and cannot resume a previous Claude session. `services/transcript.py` builds that prompt when the run's lease is exchanged:
 
 - The newest transcript row is this turn's own message. It is left out of the history and sent last, as the new message.
