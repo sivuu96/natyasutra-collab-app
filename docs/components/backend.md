@@ -157,7 +157,8 @@ Run from `backend/` with the production `DATABASE_URL` set. In the deployed hub 
 |---|---|
 | `python -m scripts.manage create-user --email ... --name ...` | Create an account when sign-up is closed. |
 | `python -m scripts.manage set-password --email ...` | Set a new password for an account. Ends all its sessions. |
-| `python -m scripts.create_cloud_agent --email ... --handle ... --project-slug ... --repo owner/name --ref main` | Create a cloud agent for a project owner or admin, attach it, and write an audit entry. Checks the handle is free and the repository is on the allow-list. `--dry-run` prints without writing. |
+| `python -m scripts.create_cloud_agent --email ... --handle ... --project-slug ... --repo owner/name --ref main` | Create a cloud agent for a project owner or admin, attach it, and write an audit entry. `--write` lets its runs commit and push to `--ref`; never for `main` or `master`. Checks the handle is free and the repository is on the allow-list. `--dry-run` prints without writing. |
+| `python -m scripts.set_agent_write --handle ... --on` or `--off` | Turn an agent's write permission on or off. `--on` refuses `main` and `master`. Audited. |
 | `python -m scripts.seed` | Sample data for local development. |
 | `python -m scripts.smoke_e2e --base http://localhost:5173` | End-to-end check against a running hub. |
 

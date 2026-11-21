@@ -26,9 +26,9 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 
 - **Browser to hub.** Session cookie, CSRF check on writes, project membership on every project route.
 - **Hub to Cloud Run.** The hub signs each run request with the dispatcher account's identity token. Cloud Run accepts only callers holding the `run.invoker` role on the runtime service, so the service is private. The dispatcher account cannot read secrets.
-- **Files returned by the agent.** The agent cannot write files. A file it returns is text, checked by name and size by both the runtime and the hub, and only people who can see its run can download it. Downloads are sent as plain-text attachments with `nosniff`, so the browser never renders them.
+- **Files returned by the agent.** The agent returns files in its reply rather than writing them. A file is text, checked by name and size by both the runtime and the hub, and only people who can see its run can download it. Downloads are sent as plain-text attachments with `nosniff`, so the browser never renders them.
 - **Runtime to hub.** The runtime has no account. It holds one lease, exchanges it once, and then uses a 15-minute token for its own invocation.
-- **Runtime to secrets and GitHub.** The runtime's account (`agent-runtime`) can read two named secrets. The GitHub token it creates covers one repository and is read-only.
+- **Runtime to secrets and GitHub.** The runtime's account (`agent-runtime`) can read two named secrets. The GitHub token it creates covers one repository: read-only, or write for a run of an agent the operator flagged, which is requested only for the push after the agent has finished. The agent never sees it.
 
 ## 3. Threats and controls
 
@@ -42,13 +42,13 @@ Browser ──(cookie + CSRF)──▶ Hub ──(identity token, then lease; be
 | A replayed or reused run lease | One use, 10-minute lifetime, stored as a hash, revoked when a newer attempt starts, bound to the execution. |
 | A run impersonating another run | Runtime tokens name one invocation and are verified on every event. |
 | A run starting for the wrong repository | The hub checks the repository against `GITHUB_ALLOWED_REPOS` and refuses before the lease is used. |
-| A run writing to the repository | The GitHub token has read-only contents access. The agent's tools are limited to `Read`, `Glob` and `Grep`. |
+| A run writing to the repository | Read-only by default. Only agents the operator flags can write, and only to branches other than main or master. Their write token is requested after the agent finishes. Their edit tools are limited to the clone and denied inside `.git`. |
 | A run escaping its workspace | The clone is in a temporary directory, deleted at the end. The run user is not root, and the image has no credentials. |
 | Secrets leaking into logs or chat | Secrets come from Secret Manager at run time. The Anthropic key is held by the runtime's proxy and never enters the agent's process. The runtime redacts the key and `sk-ant-…` patterns from output. Logs never include message bodies or credentials. |
 | Agent reading or writing outside its folder | Read and search tools are limited by permission rules to the run's folder, tested on Linux with the pinned CLI. Reads and searches outside it are refused. |
 | A runaway agent | Runtime timeout of 25 minutes; the sweeper fails a run after 40 minutes at most, and fails silent runs after 5 minutes. A person can stop a run. |
 | A replayed or duplicated event | Each event has a sequence number, stored once. A finished run refuses further events. |
-| Injection through repository content | The agent's tools are read-only and limited to the run's folder. The agent cannot run commands or write files. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
+| Injection through repository content | The agent's tools are limited to the run's folder, and read-only unless its agent is flagged for writing. The agent cannot run commands. A session's earlier turns are labelled as history, not instructions. This reduces, but does not remove, the risk that a document the agent reads changes its answer. |
 | Malicious Markdown in a reply | Replies render as Markdown with raw HTML not rendered, images shown as text, links opened in a new tab, and unsafe link targets removed. |
 | Malicious file returned by an agent | Each file is plain text, at most 100 KB, with a safe name. Downloads are attachments with `nosniff`. |
 | Stolen dispatcher key | It can sign requests that run agents, which costs money. Rotate it (see [deployment](deployment.md#5-operating-the-hub)) and keep it only in Render. |
@@ -86,7 +86,7 @@ The agent's reply is stored in the channel or the session transcript, like any m
 ## 7. Agent safety rules
 
 - An agent runs only when someone asks for it in a project where it is attached. Attaching is the owner's consent for that project.
-- Cloud agents read a copy of one repository and write nothing. Their read and search tools are limited to the run's folder. They cannot run shell commands, open pull requests or reach the network other than the Anthropic API, which they reach only through the runtime's proxy.
+- Cloud agents read a copy of one repository. Only agents the operator flags can change it, and only to push to their own branch. Their read and search tools are limited to the run's folder. They cannot run shell commands, open pull requests or reach the network other than the Anthropic API, which they reach only through the runtime's proxy.
 - Repositories must be on the allow-list. Adding one is an operator action, and the GitHub App must be installed on it.
 - Agents see only the prompt and the earlier turns of their session. They have no access to other sessions, other channels, or the rest of the hub.
 - Each run is one container. Nothing carries over between runs except the transcript that the hub sends.
@@ -109,8 +109,8 @@ These are known and accepted for a small trusted team. Each must be addressed be
 - **Dispatch retries.** A run request that reaches the service after a lost response is refused as a duplicate (`409`), because the service remembers which executions are running. A lease that is used a second time is refused as well. See [execution](components/execution.md#cloud-run-service-provider).
 - **Long-lived dispatcher key.** The hub holds a service-account key. Workload identity would remove the key; this needs a platform change.
 - **No outbound network controls on runs.** The agent's tools cannot reach the network, and the runtime's own connections go only to GitHub, Secret Manager and the Anthropic API. The service still has general network access, so restrict it with egress controls before running untrusted repositories.
-- **Write access for agents is not built.** Agents cannot change repositories. Writing to GitHub would need a separate design (see [Implementation plan](../IMPLEMENTATION_PLAN.md#deferred)).
-- **Prompt injection.** The agent reads repository text and replies to people. A document can try to change the agent's behaviour or its answer. Read-only tools limit the damage, but the agent's replies should be treated as suggestions, not verified facts.
+- **Pushes need no review.** A flagged agent's change goes straight to its branch. Branch protection on `main` does not cover agent branches. The runtime refuses `main` and `master`, and agents never open pull requests, but a bad change can reach the agent's branch and must be reviewed there.
+- **Prompt injection.** The agent reads repository text and replies to people. A document can try to change the agent's behaviour or its answer. Confined tools limit the damage, and a flagged agent can push a bad change to its branch, so the agent's replies and pushes should be treated as suggestions, not verified facts.
 - **No review of agent replies.** Replies are not checked before they are shown. Anyone reading a reply should check claims that matter.
 - **Free-plan hosting.** Render and Supabase free plans sleep or pause and have no automatic backups. See [deployment](deployment.md#known-limits).
 - **Session memory is capped.** Old turns are dropped from long sessions. This is a functional limit, not a security control.

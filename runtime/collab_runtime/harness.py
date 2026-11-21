@@ -26,22 +26,39 @@ def redact(text: str, api_key: str) -> str:
     return ANTHROPIC_KEY_SHAPE.sub("[redacted]", text)
 
 
-def tool_rules(folder: str) -> list[str]:
-    """Permission rules that confine the read and search tools to one folder.
+def tool_rules(folder: str, *, write: bool = False) -> list[str]:
+    """Permission rules that confine the file and search tools to one folder.
 
     Without them, the tools reach any file the process can read. Tested on Linux with the pinned CLI: with these
-    rules, reads and searches outside the folder are refused. The `//` prefix marks an absolute path.
+    rules, reads and searches outside the folder are refused. The `//` prefix marks an absolute path. A write run
+    also gets the edit and write tools, limited to the same folder.
     """
     scope = f"//{Path(folder).as_posix().lstrip('/')}/**"
-    return [f"Read({scope})", f"Glob({scope})", f"Grep({scope})"]
+    rules = [f"Read({scope})", f"Glob({scope})", f"Grep({scope})"]
+    if write:
+        rules += [f"Edit({scope})", f"Write({scope})"]
+    return rules
 
 
-def build_claude_args(binary: list[str], *, model: str, prompt: str, folder: str) -> list[str]:
-    # Read-only tools confined to the folder, the prompt last, then the output format; plus an explicit model.
-    return [
+def git_dir_denials(folder: str) -> list[str]:
+    """Denies that stop a write run from changing git's own files. The push step reads them."""
+    git_scope = f"//{Path(folder).as_posix().lstrip('/')}/.git/**"
+    return [f"Edit({git_scope})", f"Write({git_scope})"]
+
+
+def build_claude_args(
+    binary: list[str], *, model: str, prompt: str, folder: str, write: bool = False
+) -> list[str]:
+    # Tools confined to the folder, the prompt last, then the output format; plus an explicit model.
+    args = [
         *binary,
         "--allowedTools",
-        *tool_rules(folder),
+        *tool_rules(folder, write=write),
+    ]
+    if write:
+        args += ["--disallowedTools", *git_dir_denials(folder)]
+    return [
+        *args,
         "--model",
         model,
         "-p",
@@ -50,6 +67,7 @@ def build_claude_args(binary: list[str], *, model: str, prompt: str, folder: str
         "stream-json",
         "--verbose",
     ]
+
 
 
 def child_env(home: str, base_url: str) -> dict[str, str]:

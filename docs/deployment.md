@@ -208,7 +208,7 @@ If your organisation blocks key creation (the `iam.disableServiceAccountKeyCreat
 
 ### 3.7 GitHub App
 
-Create a GitHub App with **Repository permissions: Contents, read-only**, and no other permissions. Install it only on the repositories agents should read. Note the App ID and the installation ID, set them on the service (step 3.5), and store the private key as `github-app-key` (step 3.3).
+Create a GitHub App with **Repository permissions: Contents, read and write**, and no other permissions. The runtime asks for read-only tokens unless a run is for an agent flagged for writing, so read-only agents still only read. Install it only on the repositories agents should read. Note the App ID and the installation ID, set them on the service (step 3.5), and store the private key as `github-app-key` (step 3.3).
 
 Then set `GITHUB_ALLOWED_REPOS` in Render to the same repositories, as `owner/name` separated by commas. The hub refuses a run for any other repository.
 
@@ -231,6 +231,15 @@ An operator creates an agent for a project owner or admin. The owner must alread
 python -m scripts.create_cloud_agent --email owner@example.com --handle claude --project-slug <project-slug> --repo owner/name --ref main --dry-run
 python -m scripts.create_cloud_agent --email owner@example.com --handle claude --project-slug <project-slug> --repo owner/name --ref main
 ```
+
+To let an agent push changes to its own branch, add `--write` when creating it. For an agent that already exists, turn writing on or off with the operator command, which refuses `main` and `master`:
+
+```sh
+python -m scripts.set_agent_write --handle claude --on
+python -m scripts.set_agent_write --handle claude --off
+```
+
+Run these as described in *Running operator commands*. A write-enabled agent needs the runtime image that includes write support, so update the service after you change this.
 
 Run it from your own machine, as described in *Running operator commands* below. The first command checks everything and writes nothing. The second creates the agent and attaches it to the project. The owner can then mention `@claude` in a channel or start a session with it.
 

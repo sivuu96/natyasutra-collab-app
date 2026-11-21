@@ -54,8 +54,9 @@ def installation_token(
     private_key_pem: str,
     repo_full_name: str,
     now: int | None = None,
+    write: bool = False,
 ) -> str:
-    """Return a token that can read the contents of one repository, and nothing else."""
+    """Return a token for one repository: read-only, or read and write contents when `write` is set."""
     repo_name = validate_repo(repo_full_name).split("/", 1)[1]
     app_jwt = make_app_jwt(app_id, private_key_pem, int(now if now is not None else time.time()))
     response = http.post(
@@ -65,7 +66,7 @@ def installation_token(
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         },
-        json={"repositories": [repo_name], "permissions": {"contents": "read"}},
+        json={"repositories": [repo_name], "permissions": {"contents": "write" if write else "read"}},
     )
     if response.status_code != 201:
         raise GitHubError("github_token_refused", f"HTTP {response.status_code}")

@@ -21,6 +21,7 @@ from collab_runtime.github import GitHubError, clone_repository, installation_to
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
 from collab_runtime.model_proxy import ModelProxy
+from collab_runtime.publish import WRITE_INSTRUCTIONS, PublishError, commit_and_push
 from collab_runtime.reply_files import INSTRUCTIONS, extract_reply_files
 
 log = logging.getLogger("collab.runtime")
@@ -116,6 +117,7 @@ def run(
     read_secret: Callable[[str, str], str],
     runner: ClaudeRunner,
     prepare_repo: Callable[[str, str, str], bool | None] | None = None,
+    write_token: Callable[[str], str] | None = None,
     lease: str,
     execution_name: str,
 ) -> int:
@@ -143,7 +145,9 @@ def run(
     heartbeat = Heartbeat(sequencer, config.heartbeat_seconds, on_finished=stop_agent)
     heartbeat.start()
     try:
-        return _report_run(config, context, sequencer, hub, read_secret, runner, prepare_repo, finished)
+        return _report_run(
+            config, context, sequencer, hub, read_secret, runner, prepare_repo, finished, write_token
+        )
     finally:
         heartbeat.stop()
 
@@ -157,6 +161,7 @@ def _report_run(
     runner: ClaudeRunner,
     prepare_repo: Callable[[str, str, str], bool | None] | None,
     run_finished: threading.Event,
+    write_token: Callable[[str], str] | None = None,
 ) -> int:
     """Work the run and report every step. Returns the exit code."""
     try:
@@ -175,6 +180,7 @@ def _report_run(
 
         repository = context.get("repository")
         ref = context.get("ref") or "main"
+        publish_note = ""
         with tempfile.TemporaryDirectory(prefix="run-") as workdir:
             cwd = workdir
             if repository:
@@ -210,11 +216,13 @@ def _report_run(
                 cwd = repo_dir
             else:
                 prompt = context["prompt"]
+            can_push = bool(context.get("can_write")) and bool(repository) and write_token is not None
             command = build_claude_args(
                 shlex.split(config.claude_binary),
                 model=config.claude_model,
-                prompt=INSTRUCTIONS + "\n\n" + prompt,
+                prompt=INSTRUCTIONS + "\n\n" + (WRITE_INSTRUCTIONS + "\n\n" if can_push else "") + prompt,
                 folder=cwd,
+                write=can_push,
             )
 
             first_output = [True]
@@ -247,6 +255,8 @@ def _report_run(
                     emit_text=emit,
                 )
             _mark("agent_finished")
+            if can_push and outcome.ok and not run_finished.is_set():
+                publish_note = _publish(cwd, repository, context, write_token)
         if run_finished.is_set():
             return 0
         api_key = ""  # drop the reference as soon as the harness has finished
@@ -256,8 +266,9 @@ def _report_run(
             reply = extract_reply_files(outcome.final_text)
             for name, content in reply.files:
                 sequencer.send("file", name=name, content=content)
-            if reply.message:
-                sequencer.send("message", text=reply.message)
+            message = "\n\n".join(part for part in (reply.message, publish_note) if part)
+            if message:
+                sequencer.send("message", text=message)
             sequencer.send("completed")
             _mark("completed")
             return 0
@@ -266,6 +277,47 @@ def _report_run(
     except HubError as error:
         log.error("hub unreachable while reporting: %s", error.code)
         return 4
+
+
+def _publish(cwd: str, repository: str, context: dict[str, Any], write_token: Callable[[str], str]) -> str:
+    """Commit and push the agent's changes. Returns a line for the reply, or an empty string when there is nothing to say."""
+    handle = context.get("agent_handle", "agent")
+    try:
+        sha = commit_and_push(
+            cwd,
+            repo_full_name=repository,
+            ref=context.get("ref") or "main",
+            token=write_token(repository),
+            message=f"Changes by @{handle} (run {context['invocation_id'][:8]})",
+        )
+    except (PublishError, GitHubError) as error:
+        log.error("changes not pushed: %s", error.code)
+        return f"The changes were not pushed ({error.code})."
+    if sha is None:
+        return ""
+    return f"Pushed commit {sha[:10]} to {context.get('ref') or 'main'}."
+
+
+def make_write_token(config: Config, read_secret: Callable[[str, str], str], http: httpx.Client) -> Callable[[str], str]:
+    """A function that gives a write token for one repository. It is called only after the agent has finished."""
+
+    def token(repository: str) -> str:
+        if not config.github_app_id or not config.github_installation_id:
+            raise GitHubError("github_not_configured")
+        try:
+            private_key = read_secret(config.project_id, config.github_key_secret_name)
+        except Exception as error:
+            raise GitHubError("github_key_unavailable", type(error).__name__) from error
+        return installation_token(
+            http,
+            app_id=config.github_app_id,
+            installation_id=config.github_installation_id,
+            private_key_pem=private_key,
+            repo_full_name=repository,
+            write=True,
+        )
+
+    return token
 
 
 def make_repo_preparer(

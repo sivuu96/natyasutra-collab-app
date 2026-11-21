@@ -21,7 +21,7 @@ Each component also has its own page:
 | Model proxy | Inside the runtime process | Holds the Anthropic key and forwards the CLI's API calls. |
 | Claude Code CLI | A child process of the runtime, one per run | The agent itself. It reads the repository and writes the reply. |
 | Secret Manager | Google Cloud | Holds the Anthropic key and the GitHub App key. |
-| GitHub | github.com | The repositories. The runtime reads them through a GitHub App, read-only. |
+| GitHub | github.com | The repositories. The runtime reads them through a GitHub App. Read-only by default; an agent the operator flags for writing can also push to its own branch. |
 | Anthropic API | api.anthropic.com | The model. Reached only through the proxy. |
 | Brevo | brevo.com | Sends password reset emails. |
 
@@ -54,7 +54,7 @@ flowchart LR
     HUB -- identity token, POST /runs --> IAM --> SVC
     SVC -- lease exchange and events, runtime token --> HUB
     SVC -- read secrets --> SM
-    SVC -- read-only clone --> GH
+    SVC -- clone (read), push for flagged agents (write) --> GH
     SVC -- model calls through the proxy --> API
     HUB -- reset emails --> MAIL
 ```
@@ -222,7 +222,7 @@ flowchart TD
     D -- refused --> E[stop, exit code 3]
     D -- accepted --> F[report started]
     F --> G[read the Anthropic key from Secret Manager]
-    G --> H[read the GitHub App key, make a read-only token for one repository]
+    G --> H[read the GitHub App key, make a token for one repository, read-only unless flagged for writing]
     H --> I[new temporary folder: run-xxxx/repo]
     I --> J[shallow clone of the branch into repo/]
     J --> K[start the model proxy on 127.0.0.1, holding the key]
@@ -292,7 +292,7 @@ claude
 ```
 
 - `--allowedTools` lists the only tools that run without asking. Each is limited to the run's folder by a rule. The `//` marks an absolute path.
-- There is no `Bash`, `Edit` or `Write`, and no network tool. The CLI lists other tools, but they cannot run.
+- Read-only agents have no `Edit` or `Write`. An agent flagged for writing gets `Edit` and `Write`, limited to the same folder, with `.git/**` denied. There is no `Bash` and no network tool. The CLI lists other tools, but they cannot run.
 - `-p` runs once, in print mode: it answers the prompt and exits.
 
 **Environment** (the whole environment; nothing is inherited):
@@ -308,7 +308,7 @@ claude
 **Working folder.** The clone of the agent's branch. Read, Glob and Grep are limited to it.
 
 **Prompt.** The `-p` text is built in this order:
-1. The file instructions: the agent cannot write files, returns files as `<file name="…">` blocks, may read PDFs in ranges of 20 pages, and must treat history as history.
+1. The file instructions: the agent returns files as `<file name="…">` blocks, may read PDFs in ranges of 20 pages, and must treat history as history. A run for a flagged agent also gets a paragraph about editing files and not committing.
 2. If the repository is empty: a note that there are no commits and no files, and not to invent code.
 3. For a channel mention: the message text.
 4. For a session turn: "This message continues a conversation", the earlier turns in `<earlier_turns>`, then `New message:` and this turn's message.
@@ -317,7 +317,7 @@ claude
 
 **What it can read.** Files under the run's folder: the clone and the reply files it writes. Everything else is refused, including other folders, the process environment and other runs.
 
-**What it can write.** Nothing. The write and edit tools are not allowed.
+**What it can write.** A read-only agent: nothing. An agent flagged for writing: files inside its clone, never inside `.git`. The runtime then commits them and pushes them to the agent's own branch.
 
 **What it can reach over the network.** Only the proxy, which forwards `/v1/` to the Anthropic API. The agent's tools cannot reach any other host.
 
@@ -410,9 +410,9 @@ A cancelled run stops at its next heartbeat, within 30 seconds, when the hub ref
 2. **Hub to runtime service.** Google identity token, checked by Cloud Run; only the dispatcher account can call the service.
 3. **Runtime to hub.** One-use lease for the exchange, then a 15-minute token bound to one run.
 4. **Runtime to secrets and GitHub.** The service account reads two named secrets; the GitHub token covers one repository and only reads it.
-5. **Agent to the rest of the world.** The agent sees only its run folder, and reaches only the model through the proxy. It can write nothing.
+5. **Agent to the rest of the world.** The agent sees only its run folder, and reaches only the model through the proxy. It writes only inside its clone, and only when its agent is flagged for writing.
 
-The agent is the least trusted party. Repository content is untrusted input to it, so the agent's tools are read-only and confined, and the key is kept out of its process. See [Security](security.md).
+The agent is the least trusted party. Repository content is untrusted input to it, so the agent's tools are confined to its folder, read-only unless it is flagged for writing, and the key is kept out of its process. See [Security](security.md).
 
 ## 14. Where to look in the code
 
@@ -439,7 +439,7 @@ The agent is the least trusted party. Repository content is untrusted input to i
 - **One hub instance.** The worker, the sweeper, the rate limiter and the realtime fan-out run in one process.
 - **One run per runtime instance.** A message that arrives during a run starts a new instance if none is free, which is slower.
 - **No conversation memory in the CLI.** Each turn starts a fresh CLI; earlier turns come through the prompt, up to 40 turns and 20,000 characters.
-- **The agent cannot write files or change the repository.** Writing to GitHub is planned, and needs separate design (see [Implementation plan](../IMPLEMENTATION_PLAN.md#deferred)).
+- **Writing is opt-in and limited.** Only agents the operator flags can change files and push, and only to their own branch, never to main or master. The agent cannot open pull requests. Each push is a normal fast-forward push, so a branch that moved is not overwritten. Nothing is reviewed before it is pushed.
 - **Output is streamed as it is written.** A file's text can show in the stream before the reply is saved without it.
 
 ## 16. The run protocol in detail
@@ -456,6 +456,7 @@ This section lists every message between the hub, the runtime service and the ou
 | Runtime token | The hub, when the lease is exchanged | HS256 JWT signed with `RUNTIME_TOKEN_SECRET`. Claims: `sub` = invocation ID, `aud` = `collab-runtime`, `iss` = `collab-hub`, `iat`, `exp` | 15 minutes | `Authorization: Bearer` on every event | The hub: signature, audience, issuer, expiry and subject |
 | GitHub App JWT | The runtime, for each run | RS256 JWT signed with the App's private key. Claims: `iss` = App ID, `iat` = now minus 60 s, `exp` = now plus 540 s | About 9 minutes from signing | `Authorization: Bearer` on the token request | GitHub |
 | GitHub installation token | The runtime, for each run | Token returned by GitHub, limited to one repository with read-only contents | About one hour | `Authorization: basic` header on git commands (16.7) | GitHub |
+| GitHub write token | The runtime, only after a flagged agent's run has changed files | Token returned by GitHub, limited to one repository with contents write | About one hour | `Authorization: basic` header on the push command only (16.7) | GitHub |
 | Anthropic API key | Stored in Secret Manager; read by the runtime for each run | `sk-ant-…` key | Until rotated | Added by the proxy as `x-api-key` on each request to Anthropic | Anthropic |
 | Secret Manager access | Cloud Run gives the service its account (`agent-runtime`) through the metadata server | Google access token, obtained automatically | Short-lived | Secret Manager API calls | IAM: `secretAccessor` on the two secrets |
 | Browser session | The hub, at sign-in | Opaque token in an HttpOnly cookie; the hub stores its hash | 24 hours idle, 14 days in total | Cookie | The hub |
@@ -606,6 +607,17 @@ Output is capped at 1,000,000 bytes. After the cap, the runtime sends one notice
 
 2. **Probe** (`git ls-remote`). An empty result means the repository has no commits. That is not an error: the run goes on, and the agent is told there are no files.
 3. **Clone** (`git clone --depth 50 --single-branch --branch <ref> https://github.com/<owner>/<repo>.git <folder>`). The token is sent as a header, `http.extraHeader=Authorization: basic base64("x-access-token:<token>")`. The credential helper and the askpass program are disabled, terminal prompts are off, and the command times out after 120 seconds. Error text is cleaned of the token before it is used.
+
+**Push (write runs only).** After the agent has finished and its clone has changes, the runtime requests a write token for the repository, then runs:
+
+```
+git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c credential.helper= -c core.askPass= \
+    -c user.name="NatyaSutra agent" -c user.email=agent@natyasutra.invalid \
+    -c "http.extraHeader=Authorization: basic <base64 of x-access-token:TOKEN>" \
+    -C <clone> push https://github.com/<owner>/<repo>.git HEAD:refs/heads/<branch>
+```
+
+Before that, the commit is made with `--no-verify`, after refusing files named `.env`, `.envrc`, `id_rsa`, `id_ed25519` or ending in `.pem`, `.key` or `.p12`, and refusing symbolic links. A refused push is reported, not forced.
 
 ### 16.8 Secrets: runtime to Secret Manager
 

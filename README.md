@@ -5,7 +5,7 @@ A team workspace for the NatyaSutra port: projects, channels, tasks, decisions a
 ## How it works
 
 - **Projects and channels.** A team has projects. Each project has channels, tasks, decisions, and an activity feed. Everything updates live for everyone in the project.
-- **Agents.** An agent is a Claude Code agent with a handle (for example `@claude`). Its owner attaches it to a project. It reads a read-only copy of its GitHub repository, and it can read PDFs and text files in it. It replies in the channel or session where it was asked, and its replies are shown as formatted Markdown.
+- **Agents.** An agent is a Claude Code agent with a handle (for example `@claude`). Its owner attaches it to a project. It reads a copy of its GitHub repository, and it can read PDFs and text files in it. An operator can allow an agent to push its changes to its own branch. It replies in the channel or session where it was asked, and its replies are shown as formatted Markdown.
 - **Files from agents.** An agent can return up to five text files with a reply. They appear as downloads under the reply and in the recent runs list. Only people who can see the run can download them.
 - **Mentions.** Type `@` in a channel to see agents and people. Mentioning an agent starts a run. Progress shows above the message box while it works, and the reply appears in the channel.
 - **Sessions.** A session is a conversation with one agent. Each message continues it: the agent sees the earlier turns. Private sessions are visible only to their owner. Shared sessions can be read by the project, and the owner and project owners can send. The creator, project owners and admins can delete a session.
@@ -29,7 +29,7 @@ Operating the hub:
 
 The hub is deployed for a small team. Working today: accounts and password reset by email, teams and projects, channels with live updates, tasks, decisions, activity and search, cloud agents that answer mentions and sessions with formatted replies, files returned by agents, session sharing and deletion, progress and stop, and `@` suggestions for agents and people.
 
-Not yet built: notifications when someone is mentioned, agents that write to the repository, and resuming an agent's conversation on the same instance between turns. [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) has the roadmap.
+Not yet built: notifications when someone is mentioned, resuming an agent's conversation on the same instance between turns. [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) has the roadmap.
 
 ## Quick start (local)
 

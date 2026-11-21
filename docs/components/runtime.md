@@ -57,13 +57,13 @@ The service gets these from its environment. The hub sends the per-run values in
 2. **Exchange the lease** with `POST /api/v1/internal/executions/exchange`, giving the execution name. The hub returns the prompt, the agent's handle, the repository and branch, and a runtime token. The exact request and response are in [Architecture section 16](../architecture.md#163-exchange-runtime-to-hub). If the hub refuses, the run stops with exit code 3 (see [Execution](execution.md#one-use-run-leases)).
 3. **Report `started`.** If the harness is not supported, report `failed` and stop.
 4. **Read the Anthropic key** from Secret Manager. If that fails, report `failed` (`secret_unavailable`). The run never continues without its key.
-5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository with read-only contents access, and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary folder that is deleted when the run ends.
+5. **Get a GitHub token and clone.** The runtime signs a 10-minute JWT with the GitHub App key, asks GitHub for an installation token limited to the one repository, read-only unless the run is for a flagged agent (see Write runs), and shallow-clones the branch (`--depth 50 --single-branch`). It passes the token with an extra header, not in the clone URL, and clears the credential helper. The clone goes to a temporary folder that is deleted when the run ends.
 6. **Start the model proxy.** A local proxy starts on 127.0.0.1 on a random port, holding the Anthropic key. The Claude Code process is given only the proxy's address and a placeholder. See [Architecture](../architecture.md#8-the-model-proxy).
 7. **Run Claude Code** in the clone:
    `claude --allowedTools Read(//<folder>/**) Glob(//<folder>/**) Grep(//<folder>/**) --model <model> -p <prompt> --output-format stream-json --verbose`.
-   The read and search tools are limited to the run's folder by permission rules. There are no write, edit or shell tools. The rules were tested on Linux with the pinned CLI: reads and searches outside the folder are refused, and so is reading the process's own environment.
+   The read and search tools are limited to the run's folder by permission rules. A run for a flagged agent also allows `Edit` and `Write` with the same folder rule, and denies both inside `.git`. There are no shell tools. The rules were tested on Linux with the pinned CLI: reads and searches outside the folder are refused, and so is reading the process's own environment.
 8. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
-9. **Take files out of the reply.** The agent cannot write files. It returns a file as a block in its reply, `<file name="plan.md">…</file>`. The runtime sends each good file as a `file` event and removes the block from the reply. At most five files per reply, each at most 100 KB, with names of letters, digits, dots, dashes and underscores. Refused files are noted in the reply text.
+9. **Take files out of the reply.** The agent returns a file as a block in its reply, `<file name="plan.md">…</file>`. The runtime sends each good file as a `file` event and removes the block from the reply. At most five files per reply, each at most 100 KB, with names of letters, digits, dots, dashes and underscores. Refused files are noted in the reply text.
 10. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
 11. **Stop the proxy and delete the temporary folder.** The proxy forgets the key.
 
@@ -73,7 +73,7 @@ Each run logs `timing stage=<name> ms=<n>` lines, measured from the start of the
 
 ### Prompt the agent receives
 
-Every prompt begins with the file instructions: the agent cannot write files, returns files as `<file name="…">` blocks, must read PDFs longer than 20 pages in ranges of at most 20 pages, and must treat earlier conversation as history. Then comes the repository note if the repository is empty, then the message. For a session turn, the message is preceded by the earlier turns. The full layout is in [Architecture](../architecture.md#9-what-the-claude-code-process-sees).
+Every prompt begins with the file instructions: the agent returns files as `<file name="…">` blocks, must read PDFs longer than 20 pages in ranges of at most 20 pages, and must treat earlier conversation as history. A run for a flagged agent also gets a paragraph about editing files and not committing. Then comes the repository note if the repository is empty, then the message. For a session turn, the message is preceded by the earlier turns. The full layout is in [Architecture](../architecture.md#9-what-the-claude-code-process-sees).
 
 ### Response codes
 
@@ -117,18 +117,31 @@ Rules:
 ## Security
 
 - The Anthropic key never enters the Claude Code process. The proxy holds it and adds it to each request. The CLI sees only the proxy's address and a placeholder. The proxy forwards only `/v1/` paths and stops when the run ends.
-- The agent can read and search only its run folder, and it cannot write. Only the proxy can reach the network, and only the Anthropic API.
+- The agent can read and search only its run folder. It can write there only when its agent is flagged for writing, and never inside `.git`. Only the proxy can reach the network, and only the Anthropic API.
 - The runtime trusts nothing it receives except the hub's answer to its lease. Its token expires after 15 minutes and works only for its own invocation.
 - The GitHub token covers one repository and only reads it. The App's private key is in Secret Manager, never in the image or the environment.
 - The service's account (`agent-runtime`) can read the two secrets and write logs, and nothing else. See [deployment](../deployment.md#34-service-accounts-and-roles).
 - stderr from Claude Code is written to a temporary file, and only its last 300 characters are reported, after redaction.
+
+## Write runs
+
+A run may commit and push only when all of these hold: the agent is flagged for writing (`agents.can_write`), its branch is not `main` or `master`, and the repository is set. Such a run:
+
+1. Gets the file instructions plus a paragraph saying to edit only what was asked, and not to commit.
+2. Gets `Edit` and `Write` rules for its folder, and a denial for `.git/**`, so it cannot change git's own files.
+3. After the agent finishes, checks `git status`. With no changes, nothing is pushed and the reply is unchanged.
+4. Refuses files named `.env`, `.envrc`, `id_rsa` or `id_ed25519`, or ending in `.pem`, `.key` or `.p12`, and refuses symbolic links.
+5. Commits with the author `NatyaSutra agent`, and the message `Changes by @<handle> (run <first 8 characters of the invocation>)`.
+6. Requests a write token for the repository, only now, and pushes `HEAD` to `refs/heads/<branch>` at the GitHub address. The token is passed as a header for that one command. Hooks, fsmonitor and credential helpers are off for every git command here.
+7. Pushes as a normal push. A branch that moved since the clone is not overwritten, and the reply says the push was rejected.
+8. Adds one line to the reply: `Pushed commit <first 10 characters> to <branch>.` or `The changes were not pushed (<code>).`
 
 ## Limits
 
 - One request is one run. The clone is shallow, and the working copy is deleted at the end.
 - A run is cut off if Cloud Run stops its instance in the middle of it. The runtime does not handle that signal. The hub's sweeper fails the run after about 5 minutes without a heartbeat.
 - The agent has no memory between runs. Sessions give it earlier turns in the prompt; see [Backend](backend.md#sessions-servicestranscriptpy).
-- The agent cannot change the repository, open pull requests, or use the network beyond the Anthropic API.
+- The agent cannot open pull requests or use the network beyond the Anthropic API. A flagged agent can push to its own branch, never to main or master.
 - Scanned PDFs have no text layer, and poppler does not run OCR. Whether the agent can read such pages is not verified.
 - Only `claude_code` is supported. Any other harness reports `unsupported_harness`.
 

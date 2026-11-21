@@ -112,7 +112,7 @@ def serve() -> int:
 
     from collab_runtime.harness import ClaudeRunner
     from collab_runtime.hub import HubClient
-    from collab_runtime.main import Config, make_repo_preparer, run
+    from collab_runtime.main import Config, make_repo_preparer, make_write_token, run
     from collab_runtime.secrets import read_secret
 
     try:
@@ -123,6 +123,7 @@ def serve() -> int:
 
     hub = HubClient(config.hub_base_url)
     prepare_repo = make_repo_preparer(config, read_secret, httpx.Client(timeout=httpx.Timeout(20.0)))
+    write_token = make_write_token(config, read_secret, httpx.Client(timeout=httpx.Timeout(20.0)))
 
     def execute(lease: str, execution_name: str) -> int:
         return run(
@@ -131,6 +132,7 @@ def serve() -> int:
             read_secret=read_secret,
             runner=ClaudeRunner(timeout_seconds=config.timeout_seconds),
             prepare_repo=prepare_repo,
+            write_token=write_token,
             lease=lease,
             execution_name=execution_name,
         )

@@ -36,6 +36,15 @@ class LeaseError(Exception):
         self.code = code
 
 
+# Branches a run may never push to, whatever the agent's flag says.
+PROTECTED_REFS = frozenset({"main", "master"})
+
+
+def write_allowed(ref: str) -> bool:
+    """True when a run on this branch may commit and push. Protected branches are never writable."""
+    return ref not in PROTECTED_REFS
+
+
 @dataclass(frozen=True)
 class RunContext:
     invocation_id: uuid.UUID
@@ -46,6 +55,7 @@ class RunContext:
     runtime_expires_in: int
     repository: str | None = None
     ref: str | None = None
+    can_write: bool = False
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -138,6 +148,7 @@ def exchange_lease(
         runtime_expires_in=expires_in,
         repository=agent.repository_full_name,
         ref=agent.default_ref or ("main" if agent.repository_full_name else None),
+        can_write=agent.can_write and write_allowed(agent.default_ref or "main"),
     )
     db.commit()
     return context

@@ -26,6 +26,7 @@ class ExchangeOut(BaseModel):
     runtime_expires_in: int
     repository: str | None = None
     ref: str | None = None
+    can_write: bool = False
 
 
 def _bearer(authorization: str | None) -> str:
@@ -64,6 +65,7 @@ def exchange(
         runtime_expires_in=context.runtime_expires_in,
         repository=context.repository,
         ref=context.ref,
+        can_write=context.can_write,
     )
 
 

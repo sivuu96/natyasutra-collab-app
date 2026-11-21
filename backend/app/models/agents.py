@@ -4,6 +4,7 @@ import datetime as dt
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -37,6 +38,8 @@ class Agent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # The repository a run clones and the branch it checks out. Must be on the hub allow-list.
     repository_full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     default_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Runs may commit and push to default_ref. Set by the operator; never for main or master.
+    can_write: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     revoked_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 

@@ -21,6 +21,7 @@ from app.models.identity import User
 from app.models.projects import Project, ProjectMembership
 from app.services.audit import record_audit
 from app.services.handles import handle_taken
+from app.services.leases import write_allowed
 
 HANDLE = re.compile(r"^[a-z][a-z0-9_-]{1,38}$")
 MANAGE_ROLES = {"owner", "admin"}
@@ -34,12 +35,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--project-slug", required=True)
     parser.add_argument("--repo", required=True, help="owner/name, must be on GITHUB_ALLOWED_REPOS")
     parser.add_argument("--ref", default="main")
+    parser.add_argument("--write", action="store_true", help="runs may commit and push to --ref (not main)")
     parser.add_argument("--dry-run", action="store_true", help="validate and print, write nothing")
     args = parser.parse_args(argv)
 
     settings = get_settings()
     if not HANDLE.match(args.handle):
         print("handle must be 2-39 characters: lowercase letters, digits, - or _", file=sys.stderr)
+        return 2
+    if args.write and not write_allowed(args.ref):
+        print(f"{args.ref} is protected: an agent cannot write to it", file=sys.stderr)
         return 2
     if args.repo not in settings.github_allowed_repos:
         print(
@@ -74,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
 
             print(f"project: {project.name} ({project.slug})")
             print(f"owner:   {user.email}")
-            print(f"agent:   @{args.handle} -> {args.repo}@{args.ref}")
+            print(f"agent:   @{args.handle} -> {args.repo}@{args.ref} (write: {'yes' if args.write else 'no'})")
             if args.dry_run:
                 print("dry run: nothing written")
                 return 0
@@ -86,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
                 harness="claude_code",
                 repository_full_name=args.repo,
                 default_ref=args.ref,
+                can_write=args.write,
             )
             db.add(agent)
             db.flush()
