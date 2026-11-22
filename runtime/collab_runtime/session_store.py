@@ -62,9 +62,17 @@ class GcsSessionStore:
         blob.upload_from_string(data, content_type="application/gzip")
 
 
-def _skip_links(member: tarfile.TarInfo) -> tarfile.TarInfo | None:
-    # A link in the repository could point outside it, so links are left out of the archive.
-    return None if (member.issym() or member.islnk()) else member
+# Folders that are rebuilt from source and can be very large. They are left out, so the archive stays small.
+EXCLUDED_DIRS = frozenset({"node_modules", ".venv", "venv", "__pycache__", ".next", ".cache", ".gradle"})
+
+
+def _skip(member: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Leave out links, which could point outside the repository, and the rebuildable folders above."""
+    if member.issym() or member.islnk():
+        return None
+    if EXCLUDED_DIRS.intersection(member.name.split("/")):
+        return None
+    return member
 
 
 def pack(workdir: str) -> bytes:
@@ -73,13 +81,13 @@ def pack(workdir: str) -> bytes:
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         repo = os.path.join(workdir, REPO)
         if os.path.isdir(repo):
-            archive.add(repo, arcname=REPO, filter=_skip_links)
+            archive.add(repo, arcname=REPO, filter=_skip)
         projects = os.path.join(workdir, CLI_PROJECTS)
         if os.path.isdir(projects):
-            archive.add(projects, arcname=CLI_PROJECTS, filter=_skip_links)
+            archive.add(projects, arcname=CLI_PROJECTS, filter=_skip)
         config = os.path.join(workdir, CLI_CONFIG)
         if os.path.isfile(config):
-            archive.add(config, arcname=CLI_CONFIG, filter=_skip_links)
+            archive.add(config, arcname=CLI_CONFIG, filter=_skip)
     data = buffer.getvalue()
     if len(data) > MAX_ARCHIVE_BYTES:
         raise ArchiveError("session_too_large")

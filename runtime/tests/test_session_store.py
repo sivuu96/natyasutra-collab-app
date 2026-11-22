@@ -96,3 +96,21 @@ def test_a_resumed_turn_uses_resume_and_a_first_turn_uses_session_id() -> None:
     assert first[first.index("--session-id") + 1] == SID and "--resume" not in first
     assert later[later.index("--resume") + 1] == SID and "--session-id" not in later
     assert "--resume" not in none and "--session-id" not in none
+
+
+def test_rebuildable_folders_are_left_out_of_the_archive(tmp_path) -> None:
+    source = tmp_path / "source"
+    _make_state(str(source))
+    for folder in ("node_modules/pkg", "repo/.venv/lib", "repo/src/__pycache__"):
+        os.makedirs(os.path.join(str(source), folder), exist_ok=True)
+        with open(os.path.join(str(source), folder, "big.bin"), "wb") as f:
+            f.write(b"x" * 1024)
+    os.makedirs(os.path.join(str(source), "repo", "src"), exist_ok=True)
+    with open(os.path.join(str(source), "repo", "src", "main.py"), "w", encoding="utf-8") as f:
+        f.write("print(1)")
+
+    with tarfile.open(fileobj=io.BytesIO(pack(str(source))), mode="r:gz") as archive:
+        names = archive.getnames()
+    assert "repo/src/main.py" in names
+    assert "repo/docs/plan.md" in names
+    assert not [n for n in names if "node_modules" in n or ".venv" in n or "__pycache__" in n]
