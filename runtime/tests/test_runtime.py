@@ -376,3 +376,16 @@ def test_a_long_reply_is_clipped_to_what_the_hub_accepts() -> None:
     clipped = clip(long_reply)
     assert len(clipped) <= HUB_TEXT_LIMIT
     assert clipped.endswith("cut short: it is longer than the 20,000 characters the chat can hold.]")
+
+
+def test_a_hub_validation_error_names_the_fields_but_not_the_values() -> None:
+    import httpx
+
+    from collab_runtime.hub import _detail
+
+    response = httpx.Response(
+        422,
+        json={"detail": [{"loc": ["body", "text"], "type": "string_too_long", "msg": "secret reply text"}]},
+    )
+    assert _detail(response) == "invalid:text(string_too_long)"
+    assert "secret" not in _detail(response)

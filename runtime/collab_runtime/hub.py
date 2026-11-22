@@ -58,8 +58,19 @@ class HubClient:
 
 
 def _detail(response: httpx.Response) -> str:
+    """The hub's reason. For a validation error, the field names and error types, never the values."""
     try:
         detail = response.json().get("detail")
     except ValueError:
         return "unknown"
-    return detail if isinstance(detail, str) else "unknown"
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, list):
+        parts = []
+        for item in detail[:5]:
+            if isinstance(item, dict):
+                loc = [str(part) for part in item.get("loc", []) if part not in ("body",)]
+                parts.append(f"{'.'.join(loc) or '?'}({item.get('type', '?')})")
+        if parts:
+            return ("invalid:" + ",".join(parts))[:200]
+    return "unknown"
