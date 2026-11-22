@@ -33,6 +33,10 @@ export function SessionsView() {
   const [form, setForm] = useState({ agentId: "", title: "", visibility: "private" as "private" | "project" });
   const transcriptRef = useRef<HTMLDivElement>(null);
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  // The working folder is beside the conversation only on very wide screens. Elsewhere the chat keeps the width.
+  const [folderOpen, setFolderOpen] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(min-width: 1536px)").matches,
+  );
 
   const selected = useMemo(() => sessions.find((s) => s.id === selectedId) ?? null, [sessions, selectedId]);
 
@@ -224,7 +228,11 @@ export function SessionsView() {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)_24rem]">
+    <div
+      className={`grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)] ${
+        folderOpen ? "2xl:grid-cols-[14rem_minmax(0,1fr)_24rem]" : ""
+      }`}
+    >
       <aside className="space-y-3">
         <h2 className="text-sm font-semibold text-stone-700">Sessions</h2>
         <Card className="p-0">
@@ -286,7 +294,7 @@ export function SessionsView() {
         )}
       </aside>
 
-      <section className="flex min-h-[70vh] flex-col gap-3">
+      <section className={`flex min-h-[70vh] flex-col gap-3 lg:col-start-2 ${folderOpen ? "2xl:row-start-1" : ""}`}>
         {!selected ? (
           <Card>
             <EmptyState>Start a session with an attached agent to have a private, back-and-forth conversation.</EmptyState>
@@ -301,25 +309,30 @@ export function SessionsView() {
                   {selected.status === "closed" ? " · closed" : ""}
                 </p>
               </div>
-              {(selected.is_owner && selected.status === "active") || selected.can_delete ? (
-                <div className="flex gap-2">
-                  {selected.is_owner && selected.status === "active" && (
-                    <Button variant="secondary" onClick={() => void setVisibility(selected.visibility === "private" ? "project" : "private")}>
-                      {selected.visibility === "private" ? "Share with project" : "Make private"}
-                    </Button>
-                  )}
-                  {selected.is_owner && selected.status === "active" && (
-                    <Button variant="ghost" onClick={() => void close()}>
-                      Close
-                    </Button>
-                  )}
-                  {selected.can_delete && (
-                    <Button variant="ghost" onClick={() => void remove()}>
-                      Delete
-                    </Button>
-                  )}
-                </div>
-              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <Button variant="ghost" onClick={() => setFolderOpen((open) => !open)} aria-expanded={folderOpen}>
+                  {folderOpen ? "Hide working folder" : "Show working folder"}
+                </Button>
+                {(selected.is_owner && selected.status === "active") || selected.can_delete ? (
+                  <div className="flex gap-2">
+                    {selected.is_owner && selected.status === "active" && (
+                      <Button variant="secondary" onClick={() => void setVisibility(selected.visibility === "private" ? "project" : "private")}>
+                        {selected.visibility === "private" ? "Share with project" : "Make private"}
+                      </Button>
+                    )}
+                    {selected.is_owner && selected.status === "active" && (
+                      <Button variant="ghost" onClick={() => void close()}>
+                        Close
+                      </Button>
+                    )}
+                    {selected.can_delete && (
+                      <Button variant="ghost" onClick={() => void remove()}>
+                        Delete
+                      </Button>
+                    )}
+                  </div>
+                ) : null}
+              </div>
             </div>
             {selected.visibility === "project" && (
               <p className="text-xs text-stone-500">Shared: every project member can read this conversation and watch it live.</p>
@@ -463,9 +476,11 @@ export function SessionsView() {
         )}
       </section>
 
-      <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
-        {selected && <WorkspaceTree workspace={workspace} />}
-      </aside>
+      {folderOpen && selected && (
+        <aside className="space-y-3 lg:col-start-2 2xl:col-start-3 2xl:row-start-1 2xl:sticky 2xl:top-4 2xl:self-start">
+          <WorkspaceTree workspace={workspace} />
+        </aside>
+      )}
     </div>
   );
 }
