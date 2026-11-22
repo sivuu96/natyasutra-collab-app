@@ -3,7 +3,19 @@
 import datetime as dt
 import uuid
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, Text, Uuid
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    Uuid,
+    false,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -57,3 +69,28 @@ class AgentSessionMessage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Uuid, ForeignKey("agent_invocations.id", ondelete="SET NULL"), nullable=True
     )
     body: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SessionWorkspaceTurn(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """The working folder after one saved turn of a session: its files, what changed, and the diff.
+
+    Written by the runtime after each successful turn. Readers must be allowed to see the session.
+    """
+
+    __tablename__ = "session_workspace_turns"
+
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("agent_sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invocation_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("agent_invocations.id", ondelete="SET NULL"), nullable=True
+    )
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0")
+    files: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    changes: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False)
+    diff: Mapped[str | None] = mapped_column(Text, nullable=True)
+    diff_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
