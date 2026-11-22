@@ -54,6 +54,7 @@ def build_claude_args(
         *binary,
         "--allowedTools",
         *tool_rules(folder, write=write),
+        "Bash",  # shell commands: git, and anything else the agent needs. The folder rules above do not limit Bash.
     ]
     if write:
         args += ["--disallowedTools", *git_dir_denials(folder)]

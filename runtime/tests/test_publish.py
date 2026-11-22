@@ -196,3 +196,22 @@ def test_a_clone_without_changes_reports_none_so_the_reply_stays_as_written(tmp_
     remote = _remote(tmp_path / "remote")
     clone = _clone(remote, "feature-x", tmp_path / "clone")
     assert not has_changes(clone)
+
+
+def test_configure_push_sets_the_clone_credential_and_author(tmp_path) -> None:
+    import subprocess
+
+    from collab_runtime.publish import configure_push
+
+    folder = str(tmp_path)
+    subprocess.run(["git", "init", "-q", folder], check=True)
+    configure_push(folder, token="SECRET-WRITE-TOKEN")
+
+    def config(key: str) -> str:
+        return subprocess.run(["git", "-C", folder, "config", "--get", key], capture_output=True, text=True).stdout.strip()
+
+    header = config("http.https://github.com/.extraheader")
+    assert header.startswith("Authorization: basic ")
+    assert "SECRET-WRITE-TOKEN" not in header  # the token is base64 encoded in the header, not stored as plain text
+    assert config("user.name") == "NatyaSutra agent"
+    assert config("core.hooksPath") == "/dev/null"

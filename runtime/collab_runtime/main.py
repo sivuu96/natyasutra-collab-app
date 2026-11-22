@@ -21,7 +21,7 @@ from collab_runtime.github import GitHubError, clone_repository, installation_to
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
 from collab_runtime.model_proxy import ModelProxy
-from collab_runtime.publish import WRITE_INSTRUCTIONS, PublishError, commit_and_push
+from collab_runtime.publish import PublishError, configure_push, write_instructions
 from collab_runtime.reply_files import INSTRUCTIONS, extract_reply_files
 
 log = logging.getLogger("collab.runtime")
@@ -180,7 +180,7 @@ def _report_run(
 
         repository = context.get("repository")
         ref = context.get("ref") or "main"
-        publish_note = ""
+        can_push = bool(context.get("can_write")) and bool(repository) and write_token is not None
         with tempfile.TemporaryDirectory(prefix="run-") as workdir:
             cwd = workdir
             if repository:
@@ -207,20 +207,22 @@ def _report_run(
                 if has_files is False:
                     # An empty repository: there is nothing to read. Say so to the agent, so it answers plainly.
                     os.makedirs(repo_dir, exist_ok=True)
+                    can_push = False  # there is no clone to push from; the agent is told so below
                     prompt = (
                         f"The repository {repository} has no commits yet, so there are no files to read. "
                         "Tell the user that. Do not invent code or file contents.\n\n" + context["prompt"]
                     )
                 else:
                     prompt = context["prompt"]
+                    if can_push:
+                        can_push = _enable_push(repo_dir, repository, write_token)
                 cwd = repo_dir
             else:
                 prompt = context["prompt"]
-            can_push = bool(context.get("can_write")) and bool(repository) and write_token is not None
             command = build_claude_args(
                 shlex.split(config.claude_binary),
                 model=config.claude_model,
-                prompt=INSTRUCTIONS + "\n\n" + (WRITE_INSTRUCTIONS + "\n\n" if can_push else "") + prompt,
+                prompt=INSTRUCTIONS + "\n\n" + (write_instructions(ref) + "\n\n" if can_push else "") + prompt,
                 folder=cwd,
                 write=can_push,
             )
@@ -255,8 +257,6 @@ def _report_run(
                     emit_text=emit,
                 )
             _mark("agent_finished")
-            if can_push and outcome.ok and not run_finished.is_set():
-                publish_note = _publish(cwd, repository, context, write_token)
         if run_finished.is_set():
             return 0
         api_key = ""  # drop the reference as soon as the harness has finished
@@ -266,9 +266,8 @@ def _report_run(
             reply = extract_reply_files(outcome.final_text)
             for name, content in reply.files:
                 sequencer.send("file", name=name, content=content)
-            message = "\n\n".join(part for part in (reply.message, publish_note) if part)
-            if message:
-                sequencer.send("message", text=message)
+            if reply.message:
+                sequencer.send("message", text=reply.message)
             sequencer.send("completed")
             _mark("completed")
             return 0
@@ -279,27 +278,18 @@ def _report_run(
         return 4
 
 
-def _publish(cwd: str, repository: str, context: dict[str, Any], write_token: Callable[[str], str]) -> str:
-    """Commit and push the agent's changes. Returns a line for the reply, or an empty string when there is nothing to say."""
-    handle = context.get("agent_handle", "agent")
+def _enable_push(folder: str, repository: str, write_token: Callable[[str], str]) -> bool:
+    """Give the clone a push credential for this run. Returns False, and the run goes on read-only, if that fails."""
     try:
-        sha = commit_and_push(
-            cwd,
-            repo_full_name=repository,
-            ref=context.get("ref") or "main",
-            token=write_token(repository),
-            message=f"Changes by @{handle} (run {context['invocation_id'][:8]})",
-        )
+        configure_push(folder, token=write_token(repository))
     except (PublishError, GitHubError) as error:
-        log.error("changes not pushed: %s", error.code)
-        return f"The changes were not pushed ({error.code})."
-    if sha is None:
-        return ""
-    return f"Pushed commit {sha[:10]} to {context.get('ref') or 'main'}."
+        log.error("push not enabled: %s", error.code)
+        return False
+    return True
 
 
 def make_write_token(config: Config, read_secret: Callable[[str, str], str], http: httpx.Client) -> Callable[[str], str]:
-    """A function that gives a write token for one repository. It is called only after the agent has finished."""
+    """A function that gives a write token for one repository. Called once per write run, before the agent starts."""
 
     def token(repository: str) -> str:
         if not config.github_app_id or not config.github_installation_id:

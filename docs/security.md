@@ -86,7 +86,7 @@ The agent's reply is stored in the channel or the session transcript, like any m
 ## 7. Agent safety rules
 
 - An agent runs only when someone asks for it in a project where it is attached. Attaching is the owner's consent for that project.
-- Cloud agents read a copy of one repository. Only agents the operator flags can change it, and only to push to their own branch. Their read and search tools are limited to the run's folder. They cannot run shell commands, open pull requests or reach the network other than the Anthropic API, which they reach only through the runtime's proxy.
+- Cloud agents read a copy of one repository. Only agents the operator flags can change it, and they are told to push only to their own branch, when a user asks. Their read and search tools are limited to the run's folder, but they also have a shell, which is not limited. The shell can read the runtime's process memory and the Google metadata server, so the Anthropic key and the GitHub App key can be reached from it. The team accepted this trade-off deliberately. Mitigations: branch protection on `main` (must be set on GitHub), a token per run limited to one repository and expiring within an hour, and rotating the keys if misuse is suspected. Agents can also reach any network host through the shell.
 - Repositories must be on the allow-list. Adding one is an operator action, and the GitHub App must be installed on it.
 - Agents see only the prompt and the earlier turns of their session. They have no access to other sessions, other channels, or the rest of the hub.
 - Each run is one container. Nothing carries over between runs except the transcript that the hub sends.

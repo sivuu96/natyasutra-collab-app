@@ -292,7 +292,7 @@ claude
 ```
 
 - `--allowedTools` lists the only tools that run without asking. Each is limited to the run's folder by a rule. The `//` marks an absolute path.
-- Read-only agents have no `Edit` or `Write`. An agent flagged for writing gets `Edit` and `Write`, limited to the same folder, with `.git/**` denied. There is no `Bash` and no network tool. The CLI lists other tools, but they cannot run.
+- Every agent has `Bash`, which the folder rules do not limit. Read-only agents have no `Edit` or `Write`. An agent flagged for writing gets `Edit` and `Write`, limited to the same folder, with `.git/**` denied. The shell can reach the runtime's process memory and the metadata server; see [Security](security.md).
 - `-p` runs once, in print mode: it answers the prompt and exits.
 
 **Environment** (the whole environment; nothing is inherited):
@@ -317,7 +317,7 @@ claude
 
 **What it can read.** Files under the run's folder: the clone and the reply files it writes. Everything else is refused, including other folders, the process environment and other runs.
 
-**What it can write.** A read-only agent: nothing. An agent flagged for writing: files inside its clone, never inside `.git`. The runtime then commits them and pushes them to the agent's own branch.
+**What it can write.** A read-only agent: nothing. An agent flagged for writing: its clone, and it pushes to its own branch with git when the user asks for a push. The runtime sets up the clone's push credential before the run; it does not commit or push afterwards.
 
 **What it can reach over the network.** Only the proxy, which forwards `/v1/` to the Anthropic API. The agent's tools cannot reach any other host.
 

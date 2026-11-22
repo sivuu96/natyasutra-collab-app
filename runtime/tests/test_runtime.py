@@ -116,11 +116,12 @@ def test_stream_lines_are_parsed_and_junk_is_ignored() -> None:
     assert parse_stream_line("[1, 2]").kind == "other"
 
 
-def test_claude_is_run_read_only_with_the_prompt_last_before_format_flags() -> None:
+def test_claude_runs_with_shell_and_read_tools_and_the_prompt_last_before_format_flags() -> None:
     args = build_claude_args(["claude"], model="claude-haiku-5-5", prompt="hello", folder="/tmp/run-x/repo")
     assert args[:4] == ["claude", "--allowedTools", "Read(//tmp/run-x/repo/**)", "Glob(//tmp/run-x/repo/**)"]
     assert "Grep(//tmp/run-x/repo/**)" in args
-    assert "Bash" not in args and "Edit" not in args and "Write" not in args
+    assert "Bash" in args
+    assert "Edit" not in args and "Write" not in args  # the file tools are for write runs only
     assert args[args.index("--model") + 1] == "claude-haiku-5-5"
     assert args[args.index("-p") + 1] == "hello"
 

@@ -61,7 +61,7 @@ The service gets these from its environment. The hub sends the per-run values in
 6. **Start the model proxy.** A local proxy starts on 127.0.0.1 on a random port, holding the Anthropic key. The Claude Code process is given only the proxy's address and a placeholder. See [Architecture](../architecture.md#8-the-model-proxy).
 7. **Run Claude Code** in the clone:
    `claude --allowedTools Read(//<folder>/**) Glob(//<folder>/**) Grep(//<folder>/**) --model <model> -p <prompt> --output-format stream-json --verbose`.
-   The read and search tools are limited to the run's folder by permission rules. A run for a flagged agent also allows `Edit` and `Write` with the same folder rule, and denies both inside `.git`. There are no shell tools. The rules were tested on Linux with the pinned CLI: reads and searches outside the folder are refused, and so is reading the process's own environment.
+   The agent has a shell (`Bash`), which the folder rules do not limit. The read and search tools are limited to the run's folder by permission rules, and the rules were tested on Linux with the pinned CLI. A run for a flagged agent also allows `Edit` and `Write` with the same folder rule, and denies both inside `.git`. The shell can reach the runtime's process memory and the Google metadata server, so the model key and the GitHub App key are not safe from the agent. This was accepted deliberately; see [Security](../security.md).
 8. **Report progress** while it works: `Preparing the repository…`, `Running the agent`, and `Writing the reply`.
 9. **Take files out of the reply.** The agent returns a file as a block in its reply, `<file name="plan.md">…</file>`. The runtime sends each good file as a `file` event and removes the block from the reply. At most five files per reply, each at most 100 KB, with names of letters, digits, dots, dashes and underscores. Refused files are noted in the reply text.
 10. **Report the reply and finish**: `message`, then `completed`. On error, `failed` with a code and a short message.
@@ -125,23 +125,20 @@ Rules:
 
 ## Write runs
 
-A run may commit and push only when all of these hold: the agent is flagged for writing (`agents.can_write`), its branch is not `main` or `master`, and the repository is set. Such a run:
+A run gets write access only when the agent is flagged for writing (`agents.can_write`), the repository is set, and the branch is not `main` or `master`. Such a run:
 
-1. Gets the file instructions plus a paragraph saying to edit only what was asked, and not to commit.
-2. Gets `Edit` and `Write` rules for its folder, and a denial for `.git/**`, so it cannot change git's own files.
-3. After the agent finishes, checks `git status`. With no changes, nothing is pushed and the reply is unchanged.
-4. Refuses files named `.env`, `.envrc`, `id_rsa` or `id_ed25519`, or ending in `.pem`, `.key` or `.p12`, and refuses symbolic links.
-5. Commits with the author `NatyaSutra agent`, and the message `Changes by @<handle> (run <first 8 characters of the invocation>)`.
-6. Requests a write token for the repository, only now, and pushes `HEAD` to `refs/heads/<branch>` at the GitHub address. The token is passed as a header for that one command. Hooks, fsmonitor and credential helpers are off for every git command here.
-7. Pushes as a normal push. A branch that moved since the clone is not overwritten, and the reply says the push was rejected.
-8. Adds one line to the reply: `Pushed commit <first 10 characters> to <branch>.` or `The changes were not pushed (<code>).`
+1. Requests a write token for the repository before the agent starts, and writes it into the clone's git config as an `Authorization` header for `https://github.com/`. It also sets the commit author `NatyaSutra agent`, and `core.hooksPath` to `/dev/null`. If this fails, the run continues read-only.
+2. Gets instructions to commit and push only when the user's message asks for a push, to push with `git push origin HEAD:refs/heads/<branch>`, and never to push to `main` or `master`.
+3. The agent does its own commits and pushes with Bash. The runtime does not commit or push after the run.
+
+The agent can read that token, and so can anything else it runs. The token covers one repository and expires within an hour. The runtime's own checks (protected names, symbolic links, the fast-forward push) no longer run, because the agent's git runs them itself. Branch protection on GitHub is the control that stops a push to `main`; see [Security](../security.md).
 
 ## Limits
 
 - One request is one run. The clone is shallow, and the working copy is deleted at the end.
 - A run is cut off if Cloud Run stops its instance in the middle of it. The runtime does not handle that signal. The hub's sweeper fails the run after about 5 minutes without a heartbeat.
 - The agent has no memory between runs. Sessions give it earlier turns in the prompt; see [Backend](backend.md#sessions-servicestranscriptpy).
-- The agent cannot open pull requests or use the network beyond the Anthropic API. A flagged agent can push to its own branch, never to main or master.
+- The agent cannot open pull requests. Through its shell it can reach any network host. A flagged agent is told to push only to its own branch and never to main or master, and branch protection on GitHub is what enforces that.
 - Scanned PDFs have no text layer, and poppler does not run OCR. Whether the agent can read such pages is not verified.
 - Only `claude_code` is supported. Any other harness reports `unsupported_harness`.
 

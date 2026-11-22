@@ -13,11 +13,33 @@ PROTECTED_REFS = frozenset({"main", "master"})
 FORBIDDEN_NAMES = (".env", ".envrc", "id_rsa", "id_ed25519")
 FORBIDDEN_SUFFIXES = (".pem", ".key", ".p12")
 
-WRITE_INSTRUCTIONS = (
-    "You may change files in the repository to do what the user asked. Make only the changes the user asked for. "
-    "Do not commit and do not push: the runtime commits your changes and pushes them to this branch when you finish. "
-    "Do not create, change or delete files under .git."
-)
+
+def write_instructions(ref: str) -> str:
+    return (
+        "You may change files in the repository to do what the user asked. Make only the changes the user asked for. "
+        "Commit with git only when you have changes to keep. Push only when the user's message asks you to push; "
+        f"when it does, push with `git push origin HEAD:refs/heads/{ref}`, and never push to main or master. "
+        "Do not create, change or delete files under .git other than through git itself."
+    )
+
+
+def configure_push(folder: str, *, token: str, base_url: str = GITHUB_WEB) -> None:
+    """Give the clone a credential for its own pushes, and a commit author. The token is written to the clone's config.
+
+    The token lives in the clone for this run only. The agent can read it, so it is limited to one repository and
+    expires within an hour. Raises PublishError if git cannot be configured.
+    """
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    url = f"{base_url.rstrip('/')}/"
+    steps = [
+        ["config", f"http.{url}.extraHeader", f"Authorization: basic {basic}"],
+        ["config", "user.name", "NatyaSutra agent"],
+        ["config", "user.email", "agent@natyasutra.invalid"],
+        ["config", "core.hooksPath", "/dev/null"],
+    ]
+    for args in steps:
+        if _git_in(folder, args, token=token).returncode != 0:
+            raise PublishError("git_config_failed")
 
 GIT_SAFETY = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "credential.helper=", "-c", "core.askPass="]
 AUTHOR = ["-c", "user.name=NatyaSutra agent", "-c", "user.email=agent@natyasutra.invalid"]
@@ -92,4 +114,4 @@ def commit_and_push(
     return sha
 
 
-__all__ = ["PROTECTED_REFS", "WRITE_INSTRUCTIONS", "PublishError", "commit_and_push", "has_changes"]
+__all__ = ["PROTECTED_REFS", "PublishError", "commit_and_push", "configure_push", "has_changes", "write_instructions"]
