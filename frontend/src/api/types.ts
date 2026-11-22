@@ -189,6 +189,28 @@ export interface SessionMessage {
   files: RunFile[];
 }
 
+export interface WorkspaceFile {
+  path: string;
+  size: number;
+}
+
+export interface WorkspaceChange {
+  path: string;
+  change: "added" | "changed" | "removed";
+}
+
+// The working folder after the latest saved turn of a session.
+export interface Workspace {
+  invocation_id: string | null;
+  saved_at: string;
+  file_count: number;
+  total_bytes: number;
+  files: WorkspaceFile[];
+  changes: WorkspaceChange[];
+  diff: string | null;
+  diff_truncated: boolean;
+}
+
 export interface SessionTurn {
   invocation_id: string;
   status: InvocationStatus;

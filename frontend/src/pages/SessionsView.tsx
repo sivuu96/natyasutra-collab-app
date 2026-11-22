@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { useAuth } from "../auth/AuthContext";
 import { api } from "../api/client";
 import type { RealtimeEnvelope } from "../api/realtime";
-import type { AgentSession, Invocation, ProjectAgent, SessionMessage, SessionTurn } from "../api/types";
+import type { AgentSession, Invocation, ProjectAgent, SessionMessage, SessionTurn, Workspace } from "../api/types";
 import { Button, Card, EmptyState, ErrorText, formatTime, Input, Label, Select, TextArea, errorMessage } from "../components/ui";
 import { canCancelInvocation, isActive } from "../agents/permissions";
 import { appendDelta, clearInvocation, deltaForSession, type StreamingText } from "../sessions/streaming";
 import { useWorkspace } from "../project/workspaceContext";
 import { Markdown } from "../components/Markdown";
 import { RunFiles } from "../components/RunFiles";
+import { WorkspaceTree } from "../components/WorkspaceTree";
 
 const MAX_MESSAGE_CHARS = 10000;
 const STATUS_LABEL: Record<string, string> = {
@@ -25,6 +26,7 @@ export function SessionsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
   const [requests, setRequests] = useState<Invocation[]>([]);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [streaming, setStreaming] = useState<StreamingText>({});
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -44,14 +46,18 @@ export function SessionsView() {
     if (!selectedId) {
       setMessages([]);
       setRequests([]);
+      setWorkspace(null);
       return;
     }
-    const [transcript, invocations] = await Promise.all([
+    const [transcript, invocations, folder] = await Promise.all([
       api<SessionMessage[]>(`/projects/${project.id}/sessions/${selectedId}/messages?limit=200`),
       api<Invocation[]>(`/projects/${project.id}/invocations?limit=50`),
+      // The folder panel is secondary: if it cannot load, the conversation still shows.
+      api<Workspace | null>(`/projects/${project.id}/sessions/${selectedId}/workspace`).catch(() => null),
     ]);
     setMessages(transcript);
     setRequests(invocations.filter((i) => i.session_id === selectedId));
+    setWorkspace(folder);
   }, [project.id, selectedId]);
 
   useEffect(() => {
@@ -218,7 +224,7 @@ export function SessionsView() {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
+    <div className="grid gap-4 lg:grid-cols-[16rem_1fr_18rem]">
       <aside className="space-y-3">
         <h2 className="text-sm font-semibold text-stone-700">Sessions</h2>
         <Card className="p-0">
@@ -456,6 +462,8 @@ export function SessionsView() {
           </>
         )}
       </section>
+
+      <aside className="space-y-3">{selected && <WorkspaceTree workspace={workspace} />}</aside>
     </div>
   );
 }
