@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type UIEvent } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { api } from "../api/client";
 import type { RealtimeEnvelope } from "../api/realtime";
@@ -9,6 +9,13 @@ import { appendDelta, clearInvocation, deltaForSession, type StreamingText } fro
 import { useWorkspace } from "../project/workspaceContext";
 import { Markdown } from "../components/Markdown";
 import { RunFiles } from "../components/RunFiles";
+
+const MAX_MESSAGE_CHARS = 10000;
+const STATUS_LABEL: Record<string, string> = {
+  queued: "Waiting to start",
+  accepted: "Waiting to start",
+  running: "Working on it",
+};
 
 export function SessionsView() {
   const { project, role, subscribe, canWrite } = useWorkspace();
@@ -22,6 +29,8 @@ export function SessionsView() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ agentId: "", title: "", visibility: "private" as "private" | "project" });
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
 
   const selected = useMemo(() => sessions.find((s) => s.id === selectedId) ?? null, [sessions, selectedId]);
 
@@ -79,10 +88,30 @@ export function SessionsView() {
     });
   }, [subscribe, loadSessions, loadSelected, selectedId]);
 
+  // Keep the newest message in view, unless the reader has scrolled up to read older ones.
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (el && pinnedToBottom) el.scrollTop = el.scrollHeight;
+  }, [messages, streaming, pinnedToBottom]);
+
+  useEffect(() => {
+    setPinnedToBottom(true);
+  }, [selectedId]);
+
+  function onTranscriptScroll(event: UIEvent<HTMLDivElement>) {
+    const el = event.currentTarget;
+    setPinnedToBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
+  }
+
   // Requests are already filtered to this session; the newest one is the current turn.
   const latestTurn = requests[0];
   const busy = latestTurn ? isActive(latestTurn.status) : false;
   const canSend = !!selected && selected.can_send && selected.status === "active" && !busy && canWrite;
+  const streamingForSession = selected ? Object.entries(streaming).filter(([id]) => requests.some((r) => r.id === id)) : [];
+  // A turn that failed or was cancelled leaves no reply in the transcript, so its request is shown next to the message.
+  const endedWithoutReply = new Map(
+    requests.filter((r) => r.status === "failed" || r.status === "cancelled").map((r) => [r.id, r]),
+  );
 
   async function create(event: FormEvent) {
     event.preventDefault();
@@ -100,19 +129,38 @@ export function SessionsView() {
     }
   }
 
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (!selected || !draft.trim()) return;
+  // Sends one message as a new turn. Returns true when the agent accepted it.
+  async function submitTurn(body: string): Promise<boolean> {
+    if (!selected || !body.trim()) return false;
     setError(null);
     try {
       await api<SessionTurn>(`/projects/${project.id}/sessions/${selected.id}/turns`, {
         method: "POST",
-        json: { body: draft.trim() },
+        json: { body: body.trim() },
       });
-      setDraft("");
       await loadSelected();
+      return true;
     } catch (err) {
       setError(errorMessage(err));
+      return false;
+    }
+  }
+
+  async function sendDraft() {
+    if (!canSend || !draft.trim()) return;
+    if (await submitTurn(draft)) setDraft("");
+  }
+
+  function send(event: FormEvent) {
+    event.preventDefault();
+    void sendDraft();
+  }
+
+  // Enter sends; Shift+Enter starts a new line.
+  function onComposerKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void sendDraft();
     }
   }
 
@@ -164,10 +212,13 @@ export function SessionsView() {
     }
   }
 
-  const streamingForSession = selected ? Object.entries(streaming).filter(([id]) => requests.some((r) => r.id === id)) : [];
+  function retry(invocationId: string | null) {
+    const original = messages.find((m) => m.role === "user" && m.invocation_id === invocationId);
+    if (original) void submitTurn(original.body);
+  }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[16rem_1fr_16rem]">
+    <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
       <aside className="space-y-3">
         <h2 className="text-sm font-semibold text-stone-700">Sessions</h2>
         <Card className="p-0">
@@ -229,19 +280,18 @@ export function SessionsView() {
         )}
       </aside>
 
-      <section className="flex min-h-[60vh] flex-col gap-3">
-        <ErrorText>{error}</ErrorText>
+      <section className="flex min-h-[70vh] flex-col gap-3">
         {!selected ? (
           <Card>
             <EmptyState>Start a session with an attached agent to have a private, back-and-forth conversation.</EmptyState>
           </Card>
         ) : (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 pb-2">
               <div>
                 <h2 className="text-lg font-semibold">{selected.title}</h2>
                 <p className="text-xs text-stone-500">
-                  @{selected.agent_handle} · owned by {selected.owner_display_name}
+                  Conversation with @{selected.agent_handle} · started by {selected.owner_display_name}
                   {selected.status === "closed" ? " · closed" : ""}
                 </p>
               </div>
@@ -266,45 +316,120 @@ export function SessionsView() {
               ) : null}
             </div>
             {selected.visibility === "project" && (
-              <p className="text-xs text-stone-500">Shared: every project member can read this transcript and watch it live.</p>
+              <p className="text-xs text-stone-500">Shared: every project member can read this conversation and watch it live.</p>
             )}
-            <Card className="flex-1 space-y-3 overflow-y-auto">
+
+            <div
+              ref={transcriptRef}
+              onScroll={onTranscriptScroll}
+              className="flex-1 space-y-4 overflow-y-auto rounded-lg bg-stone-50 p-4"
+              style={{ maxHeight: "65vh" }}
+            >
               {messages.length === 0 && streamingForSession.length === 0 && (
-                <EmptyState>No messages yet.</EmptyState>
+                <EmptyState>No messages yet. Say what you need, and @{selected.agent_handle} will reply here.</EmptyState>
               )}
-              {messages.map((m) => (
-                <div key={m.id} className="text-sm">
-                  <p className="text-xs text-stone-500">
-                    {m.role === "agent" ? `@${m.agent_handle ?? "agent"}` : (m.author_display_name ?? "You")} ·{" "}
-                    {formatTime(m.created_at)}
-                  </p>
-                  {m.role === "agent" ? <Markdown text={m.body} /> : <p className="whitespace-pre-wrap">{m.body}</p>}
-                  <RunFiles projectId={project.id} invocationId={m.invocation_id} files={m.files} />
-                </div>
-              ))}
+
+              {messages.map((m) => {
+                const isAgent = m.role === "agent";
+                // Your own messages sit on the right. Messages from other members of a shared session sit on the left.
+                const mine = !isAgent && (m.author_display_name === null || m.author_display_name === user?.display_name);
+                const label = isAgent ? `@${m.agent_handle ?? "agent"}` : mine ? "You" : (m.author_display_name ?? "Member");
+                const failed = m.invocation_id ? endedWithoutReply.get(m.invocation_id) : undefined;
+                return (
+                  <div key={m.id}>
+                    <div className={mine ? "flex flex-col items-end" : "flex flex-col items-start"}>
+                      <p className="mb-1 text-xs text-stone-500">
+                        {label} · {formatTime(m.created_at)}
+                      </p>
+                      <div
+                        className={
+                          mine
+                            ? "max-w-[80%] rounded-2xl rounded-br-sm bg-amber-100 px-4 py-2 text-stone-900 shadow-sm"
+                            : isAgent
+                              ? "max-w-[85%] rounded-2xl rounded-bl-sm border border-stone-200 bg-white px-4 py-3 text-stone-900 shadow-sm"
+                              : "max-w-[80%] rounded-2xl rounded-bl-sm bg-stone-100 px-4 py-2 text-stone-900 shadow-sm"
+                        }
+                      >
+                        {isAgent ? (
+                          <Markdown text={m.body} />
+                        ) : (
+                          <p className="whitespace-pre-wrap text-sm">{m.body}</p>
+                        )}
+                      </div>
+                      {isAgent && <RunFiles projectId={project.id} invocationId={m.invocation_id} files={m.files} />}
+                    </div>
+
+                    {failed && (
+                      <div className="mt-2 flex justify-end">
+                        <div
+                          role="alert"
+                          className="max-w-[85%] rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+                        >
+                          <p className="font-medium">
+                            {failed.status === "cancelled" ? "This reply was cancelled." : "The agent could not finish this reply."}
+                          </p>
+                          {failed.error_message && <p className="mt-1 text-xs text-red-800">{failed.error_message}</p>}
+                          {canSend && (
+                            <button
+                              className="mt-2 text-sm font-medium text-red-900 underline hover:no-underline"
+                              onClick={() => retry(m.invocation_id)}
+                            >
+                              Try again
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
               {streamingForSession.map(([id, text]) => (
-                <div key={id} className="text-sm italic text-stone-600" aria-live="polite">
-                  <p className="text-xs not-italic text-stone-500">@{selected.agent_handle} is replying…</p>
-                  <Markdown text={text} />
+                <div key={id} className="flex flex-col items-start">
+                  <p className="mb-1 text-xs text-stone-500" aria-live="polite">
+                    @{selected.agent_handle} · writing
+                    <span className="ml-1 animate-pulse">…</span>
+                  </p>
+                  <div className="max-w-[85%] rounded-2xl rounded-bl-sm border border-dashed border-stone-300 bg-white px-4 py-3 text-stone-900">
+                    <Markdown text={text} />
+                  </div>
                 </div>
               ))}
-            </Card>
+            </div>
+
             {busy && latestTurn && (
-              <div className="flex items-center justify-between text-xs text-stone-600">
-                <span>Turn in progress: {latestTurn.status.replace("_", " ")}</span>
+              <div role="status" className="flex items-center justify-between text-xs text-stone-600">
+                <span>
+                  {STATUS_LABEL[latestTurn.status] ?? latestTurn.status}
+                  <span className="ml-1 animate-pulse">…</span>
+                </span>
                 {canCancelInvocation({ userId: user?.id ?? "", role }, latestTurn.requested_by_user_id, "") && (
                   <button className="text-red-700 hover:underline" onClick={() => void cancelTurn()}>
-                    Cancel turn
+                    Cancel
                   </button>
                 )}
               </div>
             )}
+
+            <ErrorText>{error}</ErrorText>
+
             {selected.can_send && selected.status === "active" ? (
-              <form onSubmit={send} className="space-y-2">
-                <Label htmlFor="session-composer">Message the agent</Label>
-                <TextArea id="session-composer" rows={3} maxLength={10000} value={draft}
-                  onChange={(e) => setDraft(e.target.value)} disabled={busy} />
-                <div className="flex justify-end">
+              <form onSubmit={send} className="space-y-1 rounded-lg border border-stone-200 bg-white p-3 shadow-sm">
+                <Label htmlFor="session-composer">Message @{selected.agent_handle}</Label>
+                <TextArea
+                  id="session-composer"
+                  rows={3}
+                  maxLength={MAX_MESSAGE_CHARS}
+                  value={draft}
+                  placeholder="Type a message. Enter sends, Shift+Enter adds a new line."
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={onComposerKey}
+                  disabled={busy}
+                />
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-stone-500">
+                    {busy ? "Wait for the reply before sending another message." : `${draft.length}/${MAX_MESSAGE_CHARS}`}
+                  </span>
                   <Button type="submit" disabled={!canSend || !draft.trim()}>
                     {busy ? "Waiting for the agent…" : "Send"}
                   </Button>
@@ -313,28 +438,24 @@ export function SessionsView() {
             ) : (
               <p className="text-sm text-stone-500">
                 {selected.status === "closed"
-                  ? "This session is closed."
-                  : "Only the session owner and project owners can send messages here. You can read the transcript."}
+                  ? "This conversation is closed."
+                  : "Only the session owner and project owners can send messages here. You can read the conversation."}
               </p>
             )}
+
+            <details className="text-xs text-stone-500">
+              <summary className="cursor-pointer select-none hover:text-stone-700">About sessions</summary>
+              <div className="mt-2 space-y-1 rounded-md bg-stone-50 p-3">
+                <p>Each message continues this conversation, and the agent sees the earlier messages when it replies.</p>
+                <p>Starting a new session starts a conversation with no earlier messages.</p>
+                <p>Private sessions are visible only to you. Sharing lets project members read and watch, but not write.</p>
+                <p>Each message starts a run on the agent’s cloud runtime. The reply appears here when it finishes.</p>
+                {canWrite && <p>Mentions in channels are one-off requests; sessions are conversations.</p>}
+              </div>
+            </details>
           </>
         )}
       </section>
-
-      <aside className="space-y-2">
-        <h2 className="text-sm font-semibold text-stone-700">About sessions</h2>
-        <Card className="space-y-2 text-xs text-stone-600">
-          <p>
-            A session is one conversation. Each message you send continues it, and the agent sees the earlier turns
-            when it replies.
-          </p>
-          <p>Starting a new session starts a new conversation with no earlier turns.</p>
-          <p>Private sessions are visible only to you. Sharing lets project members read and watch, but not write.</p>
-          <p>Each message starts a run on the agent’s cloud runtime. The reply appears in the transcript when it finishes.</p>
-          {canWrite && <p>Mentions in channels are one-off requests; sessions are conversations.</p>}
-        </Card>
-        {requests.length > 0 && <p className="text-xs text-stone-400">{requests.length} recent requests</p>}
-      </aside>
     </div>
   );
 }
