@@ -65,4 +65,15 @@ def extract_reply_files(text: str) -> ReplyFiles:
     return ReplyFiles(message=message, files=files)
 
 
-__all__ = ["INSTRUCTIONS", "MAX_FILES", "MAX_FILE_BYTES", "ReplyFiles", "extract_reply_files"]
+HUB_TEXT_LIMIT = 20_000  # the hub refuses a message event longer than this with a 422
+CLIPPED_NOTE = "\n\n[The reply was cut short: it is longer than the 20,000 characters the chat can hold.]"
+
+
+def clip(text: str) -> str:
+    """Shorten a reply to what the hub accepts, with a note, so the run still completes."""
+    if len(text) <= HUB_TEXT_LIMIT:
+        return text
+    return text[: HUB_TEXT_LIMIT - len(CLIPPED_NOTE)] + CLIPPED_NOTE
+
+
+__all__ = ["HUB_TEXT_LIMIT", "INSTRUCTIONS", "MAX_FILES", "MAX_FILE_BYTES", "ReplyFiles", "clip", "extract_reply_files"]

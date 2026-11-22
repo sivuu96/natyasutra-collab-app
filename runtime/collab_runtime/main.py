@@ -22,7 +22,7 @@ from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
 from collab_runtime.model_proxy import ModelProxy
 from collab_runtime.publish import PublishError, configure_push, write_instructions
-from collab_runtime.reply_files import INSTRUCTIONS, extract_reply_files
+from collab_runtime.reply_files import INSTRUCTIONS, clip, extract_reply_files
 
 log = logging.getLogger("collab.runtime")
 
@@ -267,14 +267,19 @@ def _report_run(
             for name, content in reply.files:
                 sequencer.send("file", name=name, content=content)
             if reply.message:
-                sequencer.send("message", text=reply.message)
+                sequencer.send("message", text=clip(reply.message))
             sequencer.send("completed")
             _mark("completed")
             return 0
         sequencer.send("failed", code=outcome.error_code or "runtime_failed", message=outcome.error_message)
         return 1
     except HubError as error:
-        log.error("hub unreachable while reporting: %s", error.code)
+        log.error("hub refused or unreachable while reporting: %s %s", error.status_code, error.code)
+        if error.status_code != 409:  # 409 means the run already finished on the hub; there is nothing to report
+            try:
+                sequencer.send("failed", code="hub_rejected", message=f"The hub refused the run's output (HTTP {error.status_code}).")
+            except HubError:
+                pass  # the hub is unreachable; its sweeper will fail the run
         return 4
 
 

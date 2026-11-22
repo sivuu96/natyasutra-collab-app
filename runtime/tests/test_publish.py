@@ -208,7 +208,7 @@ def test_configure_push_sets_the_clone_credential_and_author(tmp_path) -> None:
     configure_push(folder, token="SECRET-WRITE-TOKEN")
 
     def config(key: str) -> str:
-        return subprocess.run(["git", "-C", folder, "config", "--get", key], capture_output=True, text=True).stdout.strip()
+        return subprocess.run(["git", "-C", folder, "config", "--get", key], capture_output=True, text=True, check=False).stdout.strip()
 
     header = config("http.https://github.com/.extraheader")
     assert header.startswith("Authorization: basic ")

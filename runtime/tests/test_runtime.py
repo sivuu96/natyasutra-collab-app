@@ -366,3 +366,13 @@ def test_a_run_cancelled_on_the_hub_stops_the_agent_promptly(tmp_path: Path) -> 
     assert code == 0
     assert time.monotonic() - started < 15  # the 20-second sleep was cut short
     assert all("never sent" not in str(e) for e in hub.events)
+
+
+def test_a_long_reply_is_clipped_to_what_the_hub_accepts() -> None:
+    from collab_runtime.reply_files import HUB_TEXT_LIMIT, clip
+
+    assert clip("short") == "short"
+    long_reply = "x" * (HUB_TEXT_LIMIT + 5000)
+    clipped = clip(long_reply)
+    assert len(clipped) <= HUB_TEXT_LIMIT
+    assert clipped.endswith("cut short: it is longer than the 20,000 characters the chat can hold.]")
