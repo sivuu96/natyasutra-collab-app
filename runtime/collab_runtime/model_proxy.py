@@ -94,6 +94,9 @@ class ModelProxy:
             if name.lower() not in DROP_REQUEST
         }
         headers["x-api-key"] = self._key
+        # The reply is passed on without decoding, and its content-encoding header is dropped. So ask for plain text;
+        # otherwise httpx's default (gzip) would send compressed bytes that the CLI reads as garbage.
+        headers["accept-encoding"] = "identity"
         try:
             with self._http.stream(
                 method, self._upstream + handler.path, headers=headers, content=body
