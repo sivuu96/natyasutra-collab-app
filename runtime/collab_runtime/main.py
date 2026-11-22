@@ -19,6 +19,7 @@ from typing import Any
 
 import httpx
 
+from collab_runtime import workspace
 from collab_runtime.github import GitHubError, clone_repository, installation_token
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
@@ -175,6 +176,21 @@ def run(
         heartbeat.stop()
 
 
+def _send_workspace(sequencer: Sequencer, folder: str, before: workspace.Scan) -> None:
+    """Send the folder's summary for this turn. It is for display only: if it cannot be built or stored, the turn still completes."""
+    try:
+        fields = workspace.summary(folder, before)
+    except Exception as error:  # noqa: BLE001 - a failed summary must not fail the turn
+        log.error("workspace summary failed: %s", type(error).__name__)
+        return
+    try:
+        sequencer.send("workspace", **fields)
+    except HubError as error:
+        if error.code == "run_finished":
+            raise
+        log.warning("workspace summary not stored: HTTP %s", error.status_code)
+
+
 @contextmanager
 def _workspace(session_id: str | None) -> Iterator[str]:
     """The run's folder. A session always works in the same folder, so the CLI keeps one project folder for it.
@@ -243,6 +259,8 @@ def _report_run(
         resume = archive is not None
         base_prompt = (context.get("message") or context["prompt"]) if resume else context["prompt"]
 
+        summary_dir: str | None = None  # the repository folder a session's summary is taken from
+        baseline: workspace.Scan | None = None
         with _workspace(session_id) as workdir:
             home_dir = os.path.join(workdir, "home")
             os.makedirs(home_dir, exist_ok=True)
@@ -292,6 +310,8 @@ def _report_run(
                     prompt = base_prompt
                     if push_requested:
                         push_allowed = _enable_push(repo_dir, repository, ref, write_token)
+                if session_id:
+                    summary_dir = repo_dir
                 cwd = repo_dir
             else:
                 prompt = base_prompt
@@ -328,6 +348,8 @@ def _report_run(
                     runner.terminate()
 
             sequencer.send("progress", text="Running the agent")
+            if summary_dir is not None:
+                baseline = workspace.scan(summary_dir)  # what the folder held before this turn
             _mark("agent_started")
             # The key stays in this process: the proxy adds it to each request, and the CLI only sees the proxy.
             with ModelProxy(api_key) as proxy:
@@ -353,6 +375,8 @@ def _report_run(
                         message="The conversation could not be saved, so this reply is not kept. Send the message again.",
                     )
                     return 1
+            if baseline is not None and summary_dir is not None and outcome.ok and not run_finished.is_set():
+                _send_workspace(sequencer, summary_dir, baseline)
         if run_finished.is_set():
             return 0
         api_key = ""  # drop the reference as soon as the harness has finished
