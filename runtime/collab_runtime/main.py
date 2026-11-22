@@ -25,6 +25,7 @@ from collab_runtime.publish import (
     PROTECTED_REFS,
     PublishError,
     configure_push,
+    forget_push_credential,
     write_instructions,
 )
 from collab_runtime.reply_files import (
@@ -33,6 +34,7 @@ from collab_runtime.reply_files import (
     clip,
     extract_reply_files,
 )
+from collab_runtime.session_store import ArchiveError, SessionStore, pack, unpack
 
 log = logging.getLogger("collab.runtime")
 
@@ -58,6 +60,7 @@ class Config:
     heartbeat_seconds: float = 30.0
     github_app_id: str | None = None
     github_installation_id: str | None = None
+    session_bucket: str | None = None
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> "Config":
@@ -72,6 +75,7 @@ class Config:
             heartbeat_seconds=float(env.get("HEARTBEAT_SECONDS", "30")),
             github_app_id=env.get("GITHUB_APP_ID") or None,
             github_installation_id=env.get("GITHUB_INSTALLATION_ID") or None,
+            session_bucket=env.get("SESSION_BUCKET") or None,
         )
 
 
@@ -128,6 +132,7 @@ def run(
     runner: ClaudeRunner,
     prepare_repo: Callable[[str, str, str], bool | None] | None = None,
     write_token: Callable[[str], str] | None = None,
+    session_store: SessionStore | None = None,
     lease: str,
     execution_name: str,
 ) -> int:
@@ -156,7 +161,7 @@ def run(
     heartbeat.start()
     try:
         return _report_run(
-            config, context, sequencer, hub, read_secret, runner, prepare_repo, finished, write_token
+            config, context, sequencer, hub, read_secret, runner, prepare_repo, finished, write_token, session_store
         )
     finally:
         heartbeat.stop()
@@ -172,6 +177,7 @@ def _report_run(
     prepare_repo: Callable[[str, str, str], bool | None] | None,
     run_finished: threading.Event,
     write_token: Callable[[str], str] | None = None,
+    session_store: SessionStore | None = None,
 ) -> int:
     """Work the run and report every step. Returns the exit code."""
     try:
@@ -195,7 +201,31 @@ def _report_run(
         # The hub decides this from the current message only; the prompt also holds earlier turns of a session.
         push_requested = can_write and bool(context.get("push_requested"))
         push_allowed = False
+        # A session turn restores its saved state when there is one. Without it, the transcript in the prompt is the
+        # only memory, as before the saved state existed.
+        session_id = context.get("session_id") or None
+        archive: bytes | None = None
+        if session_id and session_store is not None:
+            try:
+                archive = session_store.get(session_id)
+            except Exception as error:  # noqa: BLE001 - without the saved state the turn cannot continue
+                log.error("session state unavailable: %s", type(error).__name__)
+                sequencer.send("failed", code="session_state_unavailable", message="The conversation's saved state could not be loaded.")
+                return 1
+        resume = archive is not None
+        base_prompt = (context.get("message") or context["prompt"]) if resume else context["prompt"]
+
         with tempfile.TemporaryDirectory(prefix="run-") as workdir:
+            home_dir = os.path.join(workdir, "home")
+            os.makedirs(home_dir, exist_ok=True)
+            if archive is not None:
+                try:
+                    unpack(archive, workdir)
+                except ArchiveError as error:
+                    log.error("session state refused: %s", error.code)
+                    sequencer.send("failed", code="session_state_invalid", message="The conversation's saved state could not be used.")
+                    return 1
+                _mark("session_restored")
             cwd = workdir
             if repository:
                 if prepare_repo is None:
@@ -204,7 +234,12 @@ def _report_run(
                 repo_dir = os.path.join(workdir, "repo")
                 sequencer.send("progress", text=f"Preparing the repository {repository}")
                 try:
-                    has_files = prepare_repo(repository, ref, repo_dir)
+                    if resume and os.path.isdir(repo_dir):
+                        # The saved repository is the session's own working copy. Its older push credential is dropped.
+                        forget_push_credential(repo_dir)
+                        has_files = True
+                    else:
+                        has_files = prepare_repo(repository, ref, repo_dir)
                     _mark("repo_ready")
                 except GitHubError as error:
                     # The detail is git's own message, already scrubbed of the token. Logged for operators and
@@ -223,15 +258,15 @@ def _report_run(
                     os.makedirs(repo_dir, exist_ok=True)
                     prompt = (
                         f"The repository {repository} has no commits yet, so there are no files to read. "
-                        "Tell the user that. Do not invent code or file contents.\n\n" + context["prompt"]
+                        "Tell the user that. Do not invent code or file contents.\n\n" + base_prompt
                     )
                 else:
-                    prompt = context["prompt"]
+                    prompt = base_prompt
                     if push_requested:
                         push_allowed = _enable_push(repo_dir, repository, ref, write_token)
                 cwd = repo_dir
             else:
-                prompt = context["prompt"]
+                prompt = base_prompt
             command = build_claude_args(
                 shlex.split(config.claude_binary),
                 model=config.claude_model,
@@ -241,6 +276,8 @@ def _report_run(
                 + prompt,
                 folder=cwd,
                 write=can_write,
+                session_id=session_id,
+                resume=resume,
             )
 
             first_output = [True]
@@ -270,11 +307,24 @@ def _report_run(
                     command=command,
                     api_key=api_key,
                     base_url=proxy.url,
-                    workdir=workdir,
+                    workdir=home_dir,  # the CLI's home: its session files live here, so they can be saved
                     cwd=cwd,
                     emit_text=emit,
                 )
             _mark("agent_finished")
+            if session_id and session_store is not None and outcome.ok and not run_finished.is_set():
+                # The turn is reported complete only after its state is saved. If the save fails, the turn fails.
+                try:
+                    session_store.put(session_id, pack(workdir))
+                    _mark("session_saved")
+                except Exception as error:  # noqa: BLE001 - a turn whose state is not saved must not look complete
+                    log.error("session state not saved: %s", type(error).__name__)
+                    sequencer.send(
+                        "failed",
+                        code="session_state_not_saved",
+                        message="The conversation could not be saved, so this reply is not kept. Send the message again.",
+                    )
+                    return 1
         if run_finished.is_set():
             return 0
         api_key = ""  # drop the reference as soon as the harness has finished

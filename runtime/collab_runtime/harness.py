@@ -47,7 +47,14 @@ def git_dir_denials(folder: str) -> list[str]:
 
 
 def build_claude_args(
-    binary: list[str], *, model: str, prompt: str, folder: str, write: bool = False
+    binary: list[str],
+    *,
+    model: str,
+    prompt: str,
+    folder: str,
+    write: bool = False,
+    session_id: str | None = None,
+    resume: bool = False,
 ) -> list[str]:
     # Tools confined to the folder, the prompt last, then the output format; plus an explicit model.
     args = [
@@ -58,6 +65,9 @@ def build_claude_args(
     ]
     if write:
         args += ["--disallowedTools", *git_dir_denials(folder)]
+    if session_id:
+        # The CLI keeps the conversation under this ID. A later turn resumes it, from the restored session files.
+        args += ["--resume", session_id] if resume else ["--session-id", session_id]
     return [
         *args,
         "--model",

@@ -59,6 +59,9 @@ class RunContext:
     can_write: bool = False
     # True when this turn's own message asks for a push. Earlier turns in a session are not checked.
     push_requested: bool = False
+    # This turn's own message, without the session history, and the session it belongs to (None for a channel mention).
+    message: str = ""
+    session_id: str | None = None
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -153,6 +156,8 @@ def exchange_lease(
         ref=agent.default_ref or ("main" if agent.repository_full_name else None),
         can_write=agent.can_write and write_allowed(agent.default_ref or "main"),
         push_requested=PUSH_TRIGGER in invocation.prompt,
+        message=invocation.prompt,
+        session_id=str(invocation.session_id) if invocation.session_id else None,
     )
     db.commit()
     return context

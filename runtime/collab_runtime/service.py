@@ -114,6 +114,7 @@ def serve() -> int:
     from collab_runtime.hub import HubClient
     from collab_runtime.main import Config, make_repo_preparer, make_write_token, run
     from collab_runtime.secrets import read_secret
+    from collab_runtime.session_store import GcsSessionStore
 
     try:
         config = Config.from_env(dict(os.environ))
@@ -124,6 +125,8 @@ def serve() -> int:
     hub = HubClient(config.hub_base_url)
     prepare_repo = make_repo_preparer(config, read_secret, httpx.Client(timeout=httpx.Timeout(20.0)))
     write_token = make_write_token(config, read_secret, httpx.Client(timeout=httpx.Timeout(20.0)))
+    # Without a bucket, sessions keep only the transcript, as before. With one, each session's state is saved and restored.
+    session_store = GcsSessionStore(config.session_bucket) if config.session_bucket else None
 
     def execute(lease: str, execution_name: str) -> int:
         return run(
@@ -133,6 +136,7 @@ def serve() -> int:
             runner=ClaudeRunner(timeout_seconds=config.timeout_seconds),
             prepare_repo=prepare_repo,
             write_token=write_token,
+            session_store=session_store,
             lease=lease,
             execution_name=execution_name,
         )

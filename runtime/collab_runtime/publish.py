@@ -17,6 +17,11 @@ FORBIDDEN_SUFFIXES = (".pem", ".key", ".p12")
 PUSH_TRIGGER = "#commit-push"
 
 
+def forget_push_credential(folder: str) -> None:
+    """Remove the push header left in a saved clone's config. Its token has expired, and a new one is set only when asked."""
+    _git_in(folder, ["config", "--unset-all", "http.https://github.com/.extraheader"])
+
+
 def write_instructions(ref: str, *, push_allowed: bool, push_requested: bool) -> str:
     base = (
         "You have full read and write access to the repository in your folder: you can read, edit, create and delete "

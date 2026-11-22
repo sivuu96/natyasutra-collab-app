@@ -28,6 +28,8 @@ class ExchangeOut(BaseModel):
     ref: str | None = None
     can_write: bool = False
     push_requested: bool = False
+    message: str = ""
+    session_id: str | None = None
 
 
 def _bearer(authorization: str | None) -> str:
@@ -68,6 +70,8 @@ def exchange(
         ref=context.ref,
         can_write=context.can_write,
         push_requested=context.push_requested,
+        message=context.message,
+        session_id=context.session_id,
     )
 
 

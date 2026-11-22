@@ -80,3 +80,15 @@ def test_a_message_without_the_trigger_does_not_request_a_push(fake_app: FastAPI
     body = _exchange(fake_client, run["token"], run["execution_name"]).json()
 
     assert body["push_requested"] is False
+
+
+def test_the_exchange_sends_the_bare_message_and_no_session_for_a_mention(
+    fake_app: FastAPI, fake_client: TestClient
+) -> None:
+    run = _start_run(fake_app, fake_client, handle=f"bare{uuid.uuid4().hex[:6]}")
+    _set_prompt(fake_app, run["invocation_id"], "Look at the README")
+
+    body = _exchange(fake_client, run["token"], run["execution_name"]).json()
+
+    assert body["message"] == "Look at the README"
+    assert body["session_id"] is None
