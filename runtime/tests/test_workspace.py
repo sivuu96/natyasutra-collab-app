@@ -93,3 +93,19 @@ def test_the_summary_has_every_field_the_hub_stores(tmp_path, key: str) -> None:
     _git_repo(root)
     before = workspace.scan(root)
     assert key in workspace.summary(root, before)
+
+
+def test_files_git_ignores_are_left_out_of_the_tree(tmp_path) -> None:
+    root = str(tmp_path)
+    _git_repo(root)
+    _write(os.path.join(root, ".gitignore"), "*.env\nbuild/\n")
+    _write(os.path.join(root, ".env"), "SECRET=1")
+    _write(os.path.join(root, "local.env"), "SECRET=2")
+    _write(os.path.join(root, "build", "out.bin"), "x")
+    _write(os.path.join(root, "app.py"), "print(1)")
+
+    files = workspace.scan(root)
+
+    assert "app.py" in files and ".gitignore" in files
+    assert ".env" not in files and "local.env" not in files
+    assert not [p for p in files if p.startswith("build/")]

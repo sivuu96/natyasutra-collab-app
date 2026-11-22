@@ -30,20 +30,35 @@ def _digest(path: str, size: int) -> str:
     return sha.hexdigest()
 
 
-def scan(repo_dir: str) -> Scan:
-    """Every regular file in the repository folder, except git's own folder and rebuildable folders."""
-    found: Scan = {}
+def _candidate_paths(repo_dir: str) -> list[str]:
+    """The files to summarise. In a git repository these are the tracked files and the untracked files that git does
+    not ignore, so the tree matches the diff and ignored files such as local secrets are never listed."""
+    if os.path.isdir(os.path.join(repo_dir, ".git")):
+        listed = _git(repo_dir, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        if listed.returncode == 0:
+            return [name for name in listed.stdout.split("\0") if name]
+    walked: list[str] = []
     for root, dirs, files in os.walk(repo_dir):
         dirs[:] = [d for d in dirs if d != ".git" and d not in EXCLUDED_DIRS]
         for name in files:
-            full = os.path.join(root, name)
-            if os.path.islink(full):
-                continue
-            rel = os.path.relpath(full, repo_dir).replace(os.sep, "/")
-            size = os.path.getsize(full)
-            found[rel] = (size, _digest(full, size))
-            if len(found) >= MAX_FILES:
-                return found
+            walked.append(os.path.relpath(os.path.join(root, name), repo_dir).replace(os.sep, "/"))
+    return walked
+
+
+def scan(repo_dir: str) -> Scan:
+    """The files in the repository folder that the tree shows: never git's folder, rebuildable folders or links."""
+    found: Scan = {}
+    for rel in sorted(_candidate_paths(repo_dir)):
+        parts = rel.split("/")
+        if ".git" in parts or EXCLUDED_DIRS.intersection(parts):
+            continue
+        full = os.path.join(repo_dir, rel)
+        if os.path.islink(full) or not os.path.isfile(full):
+            continue  # a tracked file deleted from the folder is simply absent
+        size = os.path.getsize(full)
+        found[rel] = (size, _digest(full, size))
+        if len(found) >= MAX_FILES:
+            break
     return found
 
 
