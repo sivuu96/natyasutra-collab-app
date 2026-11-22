@@ -224,7 +224,7 @@ export function SessionsView() {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[16rem_1fr_18rem]">
+    <div className="grid gap-4 lg:grid-cols-[16rem_minmax(0,1fr)_24rem]">
       <aside className="space-y-3">
         <h2 className="text-sm font-semibold text-stone-700">Sessions</h2>
         <Card className="p-0">
@@ -463,7 +463,9 @@ export function SessionsView() {
         )}
       </section>
 
-      <aside className="space-y-3">{selected && <WorkspaceTree workspace={workspace} />}</aside>
+      <aside className="space-y-3 lg:sticky lg:top-4 lg:self-start">
+        {selected && <WorkspaceTree workspace={workspace} />}
+      </aside>
     </div>
   );
 }
