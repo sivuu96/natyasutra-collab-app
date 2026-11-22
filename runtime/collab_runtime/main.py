@@ -22,7 +22,12 @@ from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
 from collab_runtime.model_proxy import ModelProxy
 from collab_runtime.publish import PublishError, configure_push, write_instructions
-from collab_runtime.reply_files import INSTRUCTIONS, clip, extract_reply_files
+from collab_runtime.reply_files import (
+    HUB_TEXT_LIMIT,
+    INSTRUCTIONS,
+    clip,
+    extract_reply_files,
+)
 
 log = logging.getLogger("collab.runtime")
 
@@ -236,7 +241,9 @@ def _report_run(
                     first_output[0] = False
                     _mark("first_output")
                 try:
-                    sequencer.send("output", text=text)
+                    # The hub takes at most HUB_TEXT_LIMIT characters per event, and one assistant message can be longer.
+                    for start in range(0, len(text), HUB_TEXT_LIMIT):
+                        sequencer.send("output", text=text[start : start + HUB_TEXT_LIMIT])
                 except HubError as error:
                     if error.code != "run_finished":
                         raise
