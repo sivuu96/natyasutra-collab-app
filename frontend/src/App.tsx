@@ -27,6 +27,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
 
 function Shell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
+  const location = useLocation();
   return (
     <div className="min-h-screen">
       <header className="flex items-center justify-between border-b border-stone-200 bg-white px-4 py-3">
@@ -42,7 +43,10 @@ function Shell({ children }: { children: ReactNode }) {
           </div>
         )}
       </header>
-      <main className="mx-auto max-w-7xl p-4">{children}</main>
+      {/* The sessions tab uses the full width, so the conversation has room. Other pages keep the normal width. */}
+      <main className={`mx-auto p-4 ${location.pathname.endsWith("/sessions") ? "max-w-none" : "max-w-7xl"}`}>
+        {children}
+      </main>
     </div>
   );
 }
