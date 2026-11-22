@@ -7,10 +7,12 @@ Flow: exchange the run lease -> read the API key from Secret Manager -> run the 
 import logging
 import os
 import shlex
+import shutil
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -34,7 +36,13 @@ from collab_runtime.reply_files import (
     clip,
     extract_reply_files,
 )
-from collab_runtime.session_store import ArchiveError, SessionStore, pack, unpack
+from collab_runtime.session_store import (
+    SESSION_ID,
+    ArchiveError,
+    SessionStore,
+    pack,
+    unpack,
+)
 
 log = logging.getLogger("collab.runtime")
 
@@ -167,6 +175,26 @@ def run(
         heartbeat.stop()
 
 
+@contextmanager
+def _workspace(session_id: str | None) -> Iterator[str]:
+    """The run's folder. A session always works in the same folder, so the CLI keeps one project folder for it.
+
+    The folder is removed when the run ends, so the only copy left is the saved state. Runs with no session get a fresh
+    temporary folder, as before.
+    """
+    if session_id and SESSION_ID.match(session_id):
+        path = os.path.join(tempfile.gettempdir(), "natyasutra-sessions", session_id)
+        shutil.rmtree(path, ignore_errors=True)  # a leftover from an earlier run on this instance
+        os.makedirs(path)
+        try:
+            yield path
+        finally:
+            shutil.rmtree(path, ignore_errors=True)
+    else:
+        with tempfile.TemporaryDirectory(prefix="run-") as workdir:
+            yield workdir
+
+
 def _report_run(
     config: Config,
     context: dict[str, Any],
@@ -215,7 +243,7 @@ def _report_run(
         resume = archive is not None
         base_prompt = (context.get("message") or context["prompt"]) if resume else context["prompt"]
 
-        with tempfile.TemporaryDirectory(prefix="run-") as workdir:
+        with _workspace(session_id) as workdir:
             home_dir = os.path.join(workdir, "home")
             os.makedirs(home_dir, exist_ok=True)
             if archive is not None:
