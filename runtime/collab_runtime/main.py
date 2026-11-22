@@ -21,7 +21,12 @@ from collab_runtime.github import GitHubError, clone_repository, installation_to
 from collab_runtime.harness import ClaudeRunner, build_claude_args
 from collab_runtime.hub import HubClient, HubError
 from collab_runtime.model_proxy import ModelProxy
-from collab_runtime.publish import PublishError, configure_push, write_instructions
+from collab_runtime.publish import (
+    PROTECTED_REFS,
+    PublishError,
+    configure_push,
+    write_instructions,
+)
 from collab_runtime.reply_files import (
     HUB_TEXT_LIMIT,
     INSTRUCTIONS,
@@ -185,7 +190,11 @@ def _report_run(
 
         repository = context.get("repository")
         ref = context.get("ref") or "main"
-        can_push = bool(context.get("can_write")) and bool(repository) and write_token is not None
+        # A flagged agent may change its clone. It pushes only when the message asks for it with the trigger.
+        can_write = bool(context.get("can_write")) and bool(repository) and write_token is not None
+        # The hub decides this from the current message only; the prompt also holds earlier turns of a session.
+        push_requested = can_write and bool(context.get("push_requested"))
+        push_allowed = False
         with tempfile.TemporaryDirectory(prefix="run-") as workdir:
             cwd = workdir
             if repository:
@@ -212,24 +221,26 @@ def _report_run(
                 if has_files is False:
                     # An empty repository: there is nothing to read. Say so to the agent, so it answers plainly.
                     os.makedirs(repo_dir, exist_ok=True)
-                    can_push = False  # there is no clone to push from; the agent is told so below
                     prompt = (
                         f"The repository {repository} has no commits yet, so there are no files to read. "
                         "Tell the user that. Do not invent code or file contents.\n\n" + context["prompt"]
                     )
                 else:
                     prompt = context["prompt"]
-                    if can_push:
-                        can_push = _enable_push(repo_dir, repository, write_token)
+                    if push_requested:
+                        push_allowed = _enable_push(repo_dir, repository, ref, write_token)
                 cwd = repo_dir
             else:
                 prompt = context["prompt"]
             command = build_claude_args(
                 shlex.split(config.claude_binary),
                 model=config.claude_model,
-                prompt=INSTRUCTIONS + "\n\n" + (write_instructions(ref) + "\n\n" if can_push else "") + prompt,
+                prompt=INSTRUCTIONS
+                + "\n\n"
+                + (write_instructions(ref, push_allowed=push_allowed, push_requested=push_requested) + "\n\n" if can_write else "")
+                + prompt,
                 folder=cwd,
-                write=can_push,
+                write=can_write,
             )
 
             first_output = [True]
@@ -290,8 +301,11 @@ def _report_run(
         return 4
 
 
-def _enable_push(folder: str, repository: str, write_token: Callable[[str], str]) -> bool:
-    """Give the clone a push credential for this run. Returns False, and the run goes on read-only, if that fails."""
+def _enable_push(folder: str, repository: str, ref: str, write_token: Callable[[str], str]) -> bool:
+    """Give the clone a push credential for this run. Returns False, and the run goes on without push, if that fails."""
+    if ref in PROTECTED_REFS:
+        log.error("push not enabled: %s is protected", ref)
+        return False
     try:
         configure_push(folder, token=write_token(repository))
     except (PublishError, GitHubError) as error:

@@ -27,6 +27,7 @@ class ExchangeOut(BaseModel):
     repository: str | None = None
     ref: str | None = None
     can_write: bool = False
+    push_requested: bool = False
 
 
 def _bearer(authorization: str | None) -> str:
@@ -66,6 +67,7 @@ def exchange(
         repository=context.repository,
         ref=context.ref,
         can_write=context.can_write,
+        push_requested=context.push_requested,
     )
 
 

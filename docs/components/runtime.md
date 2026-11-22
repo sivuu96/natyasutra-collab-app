@@ -125,13 +125,15 @@ Rules:
 
 ## Write runs
 
-A run gets write access only when the agent is flagged for writing (`agents.can_write`), the repository is set, and the branch is not `main` or `master`. Such a run:
+A run gets write access only when the agent is flagged for writing (`agents.can_write`) and the repository is set. Such a run has the `Edit` and `Write` tools and Bash in its clone, with full read and write access there.
 
-1. Requests a write token for the repository before the agent starts, and writes it into the clone's git config as an `Authorization` header for `https://github.com/`. It also sets the commit author `NatyaSutra agent`, and `core.hooksPath` to `/dev/null`. If this fails, the run continues read-only.
-2. Gets instructions to commit and push only when the user's message asks for a push, to push with `git push origin HEAD:refs/heads/<branch>`, and never to push to `main` or `master`.
-3. The agent does its own commits and pushes with Bash. The runtime does not commit or push after the run.
+Pushing needs the trigger `#commit-push` in the message that started the run. Only then:
 
-The agent can read that token, and so can anything else it runs. The token covers one repository and expires within an hour. The runtime's own checks (protected names, symbolic links, the fast-forward push) no longer run, because the agent's git runs them itself. Branch protection on GitHub is the control that stops a push to `main`; see [Security](../security.md).
+1. The runtime requests a write token for the repository, and writes it into the clone's git config as an `Authorization` header for `https://github.com/`. It also sets the commit author `NatyaSutra agent`, and `core.hooksPath` to `/dev/null`.
+2. The runtime refuses the push if the agent's branch is `main` or `master`, or if the token cannot be set up. The run then continues, and the agent is told the push is not available.
+3. The agent commits and pushes itself, with `git push origin HEAD:refs/heads/<branch>`.
+
+Without the trigger, no token is requested and the agent's changes stay in its copy, which is deleted when the run ends. The agent can read the token once it has been set up, and so can anything else it runs. The token covers one repository and expires within an hour. The runtime does not check the agent's commits (protected names, symbolic links) or its push targets, because the agent's git runs them itself. Branch protection on GitHub is the control that stops a push to `main`; see [Security](../security.md).
 
 ## Limits
 

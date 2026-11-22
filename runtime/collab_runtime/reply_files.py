@@ -21,7 +21,7 @@ BLOCK = re.compile(r'<file name="([^"]*)">\n?(.*?)\n?</file>', re.DOTALL)
 
 # Put in front of every prompt, so the agent knows how to return a file.
 INSTRUCTIONS = (
-    "You cannot write files on disk. If the user asks for a file or a document, give it in your reply as one block "
+    "If the user asks for a file or a document and you cannot write it to disk, give it in your reply as one block "
     "per file, in exactly this form:\n"
     '<file name="notes.md">\n'
     "...the whole contents of the file...\n"

@@ -38,6 +38,7 @@ class LeaseError(Exception):
 
 # Branches a run may never push to, whatever the agent's flag says.
 PROTECTED_REFS = frozenset({"main", "master"})
+PUSH_TRIGGER = "#commit-push"  # a message containing this asks the agent to push its branch
 
 
 def write_allowed(ref: str) -> bool:
@@ -56,6 +57,8 @@ class RunContext:
     repository: str | None = None
     ref: str | None = None
     can_write: bool = False
+    # True when this turn's own message asks for a push. Earlier turns in a session are not checked.
+    push_requested: bool = False
 
 
 def _aware(value: dt.datetime) -> dt.datetime:
@@ -149,6 +152,7 @@ def exchange_lease(
         repository=agent.repository_full_name,
         ref=agent.default_ref or ("main" if agent.repository_full_name else None),
         can_write=agent.can_write and write_allowed(agent.default_ref or "main"),
+        push_requested=PUSH_TRIGGER in invocation.prompt,
     )
     db.commit()
     return context

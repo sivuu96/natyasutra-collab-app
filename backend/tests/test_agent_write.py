@@ -52,3 +52,31 @@ def test_a_flagged_agent_on_main_is_still_read_only(fake_app: FastAPI, fake_clie
     body = _exchange(fake_client, run["token"], run["execution_name"]).json()
 
     assert body["can_write"] is False
+
+
+def _set_prompt(app: FastAPI, invocation_id: uuid.UUID, prompt: str) -> None:
+    from app.models.agents import AgentInvocation
+
+    with app.state.session_factory() as db:
+        db.execute(update(AgentInvocation).where(AgentInvocation.id == invocation_id).values(prompt=prompt))
+        db.commit()
+
+
+def test_push_is_requested_only_by_the_current_message(fake_app: FastAPI, fake_client: TestClient) -> None:
+    run = _start_run(fake_app, fake_client, handle=f"pusher{uuid.uuid4().hex[:6]}")
+    _set_agent(fake_app, run["invocation_id"], can_write=True, ref="feature-x")
+    _set_prompt(fake_app, run["invocation_id"], "Add the auth doc #commit-push")
+
+    body = _exchange(fake_client, run["token"], run["execution_name"]).json()
+
+    assert body["push_requested"] is True
+
+
+def test_a_message_without_the_trigger_does_not_request_a_push(fake_app: FastAPI, fake_client: TestClient) -> None:
+    run = _start_run(fake_app, fake_client, handle=f"nopush{uuid.uuid4().hex[:6]}")
+    _set_agent(fake_app, run["invocation_id"], can_write=True, ref="feature-x")
+    _set_prompt(fake_app, run["invocation_id"], "Add the auth doc")
+
+    body = _exchange(fake_client, run["token"], run["execution_name"]).json()
+
+    assert body["push_requested"] is False

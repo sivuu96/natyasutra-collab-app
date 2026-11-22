@@ -215,3 +215,15 @@ def test_configure_push_sets_the_clone_credential_and_author(tmp_path) -> None:
     assert "SECRET-WRITE-TOKEN" not in header  # the token is base64 encoded in the header, not stored as plain text
     assert config("user.name") == "NatyaSutra agent"
     assert config("core.hooksPath") == "/dev/null"
+
+
+def test_write_instructions_say_what_the_run_may_do() -> None:
+    from collab_runtime.publish import PUSH_TRIGGER, write_instructions
+
+    allowed = write_instructions("feature-x", push_allowed=True, push_requested=True)
+    assert "git push origin HEAD:refs/heads/feature-x" in allowed and "Never push to main" in allowed
+    refused = write_instructions("feature-x", push_allowed=False, push_requested=True)
+    assert "not available in this run" in refused and "git push" not in refused
+    idle = write_instructions("feature-x", push_allowed=False, push_requested=False)
+    assert PUSH_TRIGGER in idle and "git push origin" not in idle
+    assert "full read and write access" in idle

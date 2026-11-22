@@ -14,12 +14,27 @@ FORBIDDEN_NAMES = (".env", ".envrc", "id_rsa", "id_ed25519")
 FORBIDDEN_SUFFIXES = (".pem", ".key", ".p12")
 
 
-def write_instructions(ref: str) -> str:
-    return (
-        "You may change files in the repository to do what the user asked. Make only the changes the user asked for. "
-        "Commit with git only when you have changes to keep. Push only when the user's message asks you to push; "
-        f"when it does, push with `git push origin HEAD:refs/heads/{ref}`, and never push to main or master. "
-        "Do not create, change or delete files under .git other than through git itself."
+PUSH_TRIGGER = "#commit-push"
+
+
+def write_instructions(ref: str, *, push_allowed: bool, push_requested: bool) -> str:
+    base = (
+        "You have full read and write access to the repository in your folder: you can read, edit, create and delete "
+        "files and run commands there. Make the changes the user asked for."
+    )
+    if push_allowed:
+        return base + (
+            f" The user asked for a push. Commit your changes with a clear message, then push them with "
+            f"`git push origin HEAD:refs/heads/{ref}`. Never push to main or master."
+        )
+    if push_requested:
+        return base + (
+            " The user asked for a push, but pushing is not available in this run. Say so in your reply, and do not "
+            "try to push."
+        )
+    return base + (
+        f" Do not commit or push unless the user's message contains {PUSH_TRIGGER}. Changes made in this run stay in its "
+        "copy and are discarded when the run ends."
     )
 
 
@@ -114,4 +129,4 @@ def commit_and_push(
     return sha
 
 
-__all__ = ["PROTECTED_REFS", "PublishError", "commit_and_push", "configure_push", "has_changes", "write_instructions"]
+__all__ = ["PROTECTED_REFS", "PUSH_TRIGGER", "PublishError", "commit_and_push", "configure_push", "has_changes", "write_instructions"]
