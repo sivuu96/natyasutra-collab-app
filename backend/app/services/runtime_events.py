@@ -8,7 +8,7 @@ Each event is applied at most once, keyed by (invocation, sequence).
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -16,21 +16,54 @@ from app.db.base import utcnow
 from app.models.agents import Agent, AgentInvocation, InvocationFile
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, InvocationStatus
 from app.models.execution import RunEvent
-from app.models.sessions import AgentSession, AgentSessionMessage
+from app.models.sessions import AgentSession, AgentSessionMessage, SessionWorkspaceTurn
 from app.models.work import Message
 from app.services.agents import _project_envelope, session_scope
 from app.services.files import MAX_FILES_PER_RUN
 
+MAX_WORKSPACE_FILES = 2_000
+MAX_WORKSPACE_CHANGES = 500
+CHANGE_KINDS = frozenset({"added", "changed", "removed"})
+
 
 class RunEventIn(BaseModel):
     sequence: int = Field(ge=0, le=1_000_000)
-    type: Literal["started", "progress", "heartbeat", "output", "message", "file", "completed", "failed"]
+    type: Literal[
+        "started", "progress", "heartbeat", "output", "message", "file", "workspace", "completed", "failed"
+    ]
     text: str | None = Field(default=None, max_length=20_000)
     code: str | None = Field(default=None, max_length=60)
     message: str | None = Field(default=None, max_length=500)
     # File events only: a name the runtime has checked, and the whole text of the file.
     name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$")
     content: str | None = Field(default=None, max_length=100_000)
+    # Workspace events only: the working folder after a turn of a session.
+    file_count: int | None = Field(default=None, ge=0, le=MAX_WORKSPACE_FILES)
+    total_bytes: int | None = Field(default=None, ge=0)
+    files: list[dict[str, Any]] | None = Field(default=None, max_length=MAX_WORKSPACE_FILES)
+    changes: list[dict[str, Any]] | None = Field(default=None, max_length=MAX_WORKSPACE_CHANGES)
+    diff: str | None = Field(default=None, max_length=100_000)
+    diff_truncated: bool = False
+
+    @field_validator("files")
+    @classmethod
+    def _files_have_path_and_size(cls, files: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        for entry in files or []:
+            if not isinstance(entry.get("path"), str) or len(entry["path"]) > 500:
+                raise ValueError("each file needs a path of at most 500 characters")
+            if not isinstance(entry.get("size"), int) or entry["size"] < 0:
+                raise ValueError("each file needs a size")
+        return files
+
+    @field_validator("changes")
+    @classmethod
+    def _changes_have_path_and_kind(cls, changes: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        for entry in changes or []:
+            if not isinstance(entry.get("path"), str) or len(entry["path"]) > 500:
+                raise ValueError("each change needs a path of at most 500 characters")
+            if entry.get("change") not in CHANGE_KINDS:
+                raise ValueError("each change must be added, changed or removed")
+        return changes
 
 
 class RunEventError(Exception):
@@ -118,6 +151,8 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
     elif event.type == "file":
         _mark_running(invocation)
         _store_run_file(db, invocation, event.name, event.content)
+    elif event.type == "workspace":
+        _store_workspace(db, invocation, event)
     elif event.type == "message":
         _mark_running(invocation)
         publish.extend(_persist_reply(db, invocation, agent, event.text or ""))
@@ -158,6 +193,28 @@ def apply_runtime_event(db: Session, invocation_id: uuid.UUID, event: RunEventIn
             )
         )
     return False, publish
+
+
+def _store_workspace(db: Session, invocation: AgentInvocation, event: RunEventIn) -> None:
+    """Keep the working folder after a session turn. A run that is not part of a session has no folder to keep."""
+    if invocation.session_id is None:
+        return
+    session = db.get(AgentSession, invocation.session_id)
+    if session is None:
+        return
+    db.add(
+        SessionWorkspaceTurn(
+            session_id=invocation.session_id,
+            project_id=invocation.project_id,
+            invocation_id=invocation.id,
+            file_count=event.file_count or 0,
+            total_bytes=event.total_bytes or 0,
+            files=event.files or [],
+            changes=event.changes or [],
+            diff=event.diff,
+            diff_truncated=event.diff_truncated,
+        )
+    )
 
 
 def _mark_running(invocation: AgentInvocation) -> None:

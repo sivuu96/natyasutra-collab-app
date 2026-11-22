@@ -19,6 +19,7 @@ from app.db.base import utcnow
 from app.deps import get_current_user, get_db
 from app.models import Agent, AgentInvocation, AgentSession, AgentSessionMessage, ProjectAgent, User
 from app.models.enums import TERMINAL_INVOCATION_STATUSES, ProjectRole, SessionStatus, SessionVisibility
+from app.models.sessions import SessionWorkspaceTurn
 from app.realtime.hub import hub
 from app.services.agents import Outcome, apply_outcome, create_session_turn
 from app.services.audit import record_audit
@@ -77,6 +78,19 @@ class TurnOut(BaseModel):
     invocation_id: uuid.UUID
     status: str
     error_code: str | None
+
+
+class WorkspaceOut(BaseModel):
+    """The working folder after the latest saved turn: the tree, what changed in that turn, and the diff."""
+
+    invocation_id: uuid.UUID | None
+    saved_at: Any
+    file_count: int
+    total_bytes: int
+    files: list[dict[str, Any]]
+    changes: list[dict[str, Any]]
+    diff: str | None
+    diff_truncated: bool
 
 
 def _req_id(request: Request) -> str | None:
@@ -227,6 +241,36 @@ def get_session(
 ) -> SessionOut:
     load_project_for(db, user, project_id)
     return _session_out(db, _visible_session(db, user, project_id, session_id), user)
+
+
+@router.get("/projects/{project_id}/sessions/{session_id}/workspace", response_model=WorkspaceOut | None)
+def session_workspace(
+    project_id: uuid.UUID,
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> WorkspaceOut | None:
+    """The latest saved working folder of a session. Visible to everyone who can read the session."""
+    load_project_for(db, user, project_id)
+    _visible_session(db, user, project_id, session_id)
+    row = db.scalars(
+        select(SessionWorkspaceTurn)
+        .where(SessionWorkspaceTurn.session_id == session_id)
+        .order_by(SessionWorkspaceTurn.created_at.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    return WorkspaceOut(
+        invocation_id=row.invocation_id,
+        saved_at=row.created_at,
+        file_count=row.file_count,
+        total_bytes=row.total_bytes,
+        files=row.files,
+        changes=row.changes,
+        diff=row.diff,
+        diff_truncated=row.diff_truncated,
+    )
 
 
 @router.get("/projects/{project_id}/sessions/{session_id}/messages", response_model=list[SessionMessageOut])
